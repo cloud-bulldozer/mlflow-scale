@@ -23,6 +23,7 @@ A comprehensive collection of scripts for running performance & scale tests for 
 | `oc` | OpenShift CLI configured with cluster access |
 | `jq` | JSON processor for parsing results |
 | `curl` | HTTP client for Prometheus queries |
+| `envsubst` | Environment variable substitution |
 | `python3` | Python 3.x with `pandas` and `matplotlib` |
 
 Install Python dependencies:
@@ -53,8 +54,8 @@ make deploy-to-platform IMG=quay.io/mlflow-operator/mlflow-operator:master PLATF
 
 ```bash
 # Set required environment variables
-export MLFLOW_URL="https://your-mlflow-route.example.com"
-export MLFLOW_TOKEN="sha256~your-token-here"
+export MLFLOW_URL="https://your-data-science-gateway.example.com/mlflow"
+export MLFLOW_TOKEN="sha256~xxxxxxxxxxxx"
 
 # Run the full test suite
 ./scripts/run_suite.sh

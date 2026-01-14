@@ -34,6 +34,11 @@ spec:
   containers:
   - name: k6
     image: grafana/k6:master
+    env:
+    - name: MLFLOW_URL
+      value: "${MLFLOW_URL}"
+    - name: MLFLOW_TOKEN
+      value: "${MLFLOW_TOKEN}"
     command:
     - /bin/sh
     - -c

@@ -117,8 +117,9 @@ start_k6_pod() {
     # Wait for pod to be fully deleted
     oc wait --for=delete pod/"${K6_POD_NAME}" -n "${NAMESPACE}" --timeout=60s 2>/dev/null || true
     
-    # Create the k6 pod
-    oc apply -f "${SCRIPT_DIR}/k6-pod.yml"
+    # Create the k6 pod with environment variables substituted
+    export MLFLOW_URL MLFLOW_TOKEN
+    envsubst '${MLFLOW_URL} ${MLFLOW_TOKEN}' < "${SCRIPT_DIR}/k6-pod.yml" | oc apply -f -
     
     # Wait for pod to be ready
     log_info "Waiting for k6 pod to be ready..."
@@ -407,6 +408,7 @@ Requirements:
   - oc CLI configured with cluster access
   - jq for JSON processing
   - curl for Prometheus queries
+  - envsubst for environment variable substitution
   - Python 3 with pandas and matplotlib for report generation
 
 EOF
@@ -414,7 +416,7 @@ EOF
 fi
 
 # Check prerequisites
-for cmd in oc jq curl python3; do
+for cmd in oc jq curl python3 envsubst; do
     if ! command -v "${cmd}" &>/dev/null; then
         log_error "Required command not found: ${cmd}"
         exit 1
