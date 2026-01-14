@@ -94,9 +94,9 @@ ls scripts/results/
 The default test matrix can be modified in `run_suite.sh`:
 
 ```bash
-TENANCY_MODES=("1" "10" "100" "1000")  # Number of tenants
-CONCURRENCY_LEVELS=(10 20 40)           # Concurrency per test
-TEST_DURATION="5m"                      # Duration per test
+TENANCY_MODES=("1" "10" "100" "500")  # Number of tenants
+CONCURRENCY_LEVELS=(5 10 20)           # Concurrency per test
+TEST_DURATION="10m"                      # Duration per test
 ```
 
 ---
