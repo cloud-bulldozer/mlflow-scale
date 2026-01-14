@@ -40,8 +40,13 @@ pip install -r scripts/requirements.txt
 Infrasturcture pre-requisite: OpenShift cluster with installed [OpenDataHub operator](https://github.com/opendatahub-io/opendatahub-operator)
 ```bash
 # Apply OpenDataHub manifests
-oc apply -f manifests/DataScienceCluster.yml
 oc apply -f manifests/DSCInitialization.yml
+oc apply -f manifests/DataScienceCluster.yml
+```
+
+Install the mlflow-operator from the [repo](https://github.com/opendatahub-io/mlflow-operator):
+```bash
+make deploy-to-platform IMG=quay.io/mlflow-operator/mlflow-operator:master PLATFORM=odh
 ```
 
 ### 2. Run the Test Suite
@@ -160,12 +165,7 @@ mlflow-scale/
 │   ├── collect_metrics.sh        # Prometheus metrics collector
 │   ├── report_summary.py         # Report & chart generator
 │   ├── k6-pod.yml                # k6 pod specification
-│   ├── requirements.txt          # Python dependencies
-│   └── results/                  # Test output directory
-│       ├── summary_*.json        # k6 raw results
-│       ├── metrics_*.csv         # Prometheus metrics
-│       ├── report_summary.csv    # Consolidated report
-│       └── chart_*.png           # Generated visualizations
+│   └── requirements.txt          # Python dependencies
 │
 └── README.md
 ```
