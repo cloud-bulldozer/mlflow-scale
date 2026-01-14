@@ -1,0 +1,16 @@
+apiVersion: mlflow.opendatahub.io/v1
+kind: MLflow
+metadata:
+  name: mlflow
+spec:
+  storage:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 10Gi
+  backendStoreUri: "postgresql://postgres:postgres@postgresql.default.svc.cluster.local:5432/mlflow"
+  artifactsDestination: "file:///mlflow/artifacts"
+  serveArtifacts: true
+  image:
+    imagePullPolicy: Always

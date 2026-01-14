@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: k6-benchmark
+  namespace: opendatahub
+  labels:
+    app: k6-benchmark
+spec:
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+          - key: app
+            operator: In
+            values:
+            - mlflow
+        topologyKey: kubernetes.io/hostname
+      - labelSelector:
+          matchExpressions:
+          - key: app
+            operator: In
+            values:
+            - istio-ingressgateway
+            - data-science-gateway
+        topologyKey: kubernetes.io/hostname
+      - labelSelector:
+          matchExpressions:
+          - key: ingresscontroller.operator.openshift.io/deployment-ingresscontroller
+            operator: In
+            values:
+            - default
+        topologyKey: kubernetes.io/hostname
+  containers:
+  - name: k6
+    image: grafana/k6:master
+    command:
+    - /bin/sh
+    - -c
+    - |
+      echo "k6 load testing tool ready with load test scripts from ConfigMap."
+      echo ""
+      echo "Available scripts:"
+      echo "  /scripts/mlflow_scale_test.js - MLflow performance test"
+      echo ""
+      echo "To run tests, exec into this pod:"
+      echo "  oc exec -it k6-benchmark -n opendatahub -- sh"
+      echo ""
+      echo "Environment Variables:"
+      echo "  MLFLOW_URL       - MLflow server URL (required)"
+      echo "  MLFLOW_TOKEN     - Authentication token (required)"
+      echo "  VUS              - Total virtual users (default: 10)"
+      echo "  DURATION         - Test duration (default: 1m)"
+      echo "  TENANT_COUNT     - Number of tenants (default: 1)"
+      echo "  DISABLE_TENANCY  - Set to 'true' for baseline test (default: false)"
+      echo ""
+      echo "Examples:"
+      echo ""
+      echo "# Baseline test (no tenancy):"
+      echo "  k6 run -e MLFLOW_URL=https://mlflow.example.com -e MLFLOW_TOKEN=sha256~xxx -e VUS=10 -e DURATION=1m -e DISABLE_TENANCY=true /scripts/mlflow_scale_test.js"
+      echo ""
+      echo "# Multi-tenant test:"
+      echo "  k6 run -e MLFLOW_URL=https://mlflow.example.com -e MLFLOW_TOKEN=sha256~xxx -e VUS=50 -e DURATION=5m -e TENANT_COUNT=100 /scripts/mlflow_scale_test.js"
+      echo ""
+      sleep infinity
+    volumeMounts:
+    - name: loadtest-script
+      mountPath: /scripts
+      readOnly: true
+    resources:
+      requests:
+        memory: "2Gi"
+        cpu: "1000m"
+      limits:
+        memory: "2Gi"
+  volumes:
+  - name: loadtest-script
+    configMap:
+      name: k6-loadtest-script
+  restartPolicy: Never
