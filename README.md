@@ -95,7 +95,7 @@ The default test matrix can be modified in `run_suite.sh`:
 
 ```bash
 TENANCY_MODES=("1" "10" "100" "1000")  # Number of tenants
-VU_LEVELS=(10 20 40)                    # Virtual users per test
+CONCURRENCY_LEVELS=(10 20 40)           # Concurrency per test
 TEST_DURATION="5m"                      # Duration per test
 ```
 
@@ -105,7 +105,7 @@ TEST_DURATION="5m"                      # Duration per test
 
 The k6 test script (`mlflow_scale_test.js`) simulates realistic MLflow usage:
 
-### Training Scenario (20% of VUs)
+### Training Scenario (20% of total load)
 
 Simulates ML training pipelines writing to MLflow:
 
@@ -118,7 +118,7 @@ Simulates ML training pipelines writing to MLflow:
 | `log_artifact` | Upload 2 artifacts (~10KB each) |
 | `update_run_status` | Mark run as FINISHED |
 
-### Browsing Scenario (80% of VUs)
+### Browsing Scenario (80% of total load)
 
 Simulates users browsing MLflow UI:
 
@@ -138,14 +138,14 @@ Simulates users browsing MLflow UI:
 | Chart | Description |
 |-------|-------------|
 | `chart_summary_dashboard.png` | Overview of throughput, requests, and failures |
-| `chart_response_times_by_vus.png` | P95 latency vs virtual users |
+| `chart_response_times_by_concurrency.png` | P95 latency vs concurrency |
 | `chart_response_times_by_tenants.png` | P95 latency vs tenant count |
-| `chart_throughput_heatmap.png` | Request rate heatmap (tenants × VUs) |
+| `chart_throughput_heatmap.png` | Request rate heatmap (tenants × concurrency) |
 | `chart_response_times_p95_heatmap.png` | P95 latency heatmap |
 | `chart_passed_counts.png` | Successful operations by config |
 | `chart_cpu_utilization.png` | CPU usage by component |
 | `chart_memory_utilization.png` | Memory usage by component |
-| `chart_mlflow_cpu_by_vus.png` | MLflow CPU vs virtual users |
+| `chart_mlflow_cpu_by_concurrency.png` | MLflow CPU vs concurrency |
 | `chart_mlflow_cpu_by_tenants.png` | MLflow CPU vs tenant count |
 
 ---
@@ -202,7 +202,7 @@ oc exec -it k6-benchmark -n opendatahub -- sh
 k6 run \
   -e MLFLOW_URL=https://mlflow.example.com \
   -e MLFLOW_TOKEN=sha256~xxx \
-  -e VUS=10 \
+  -e CONCURRENCY=10 \
   -e DURATION=5m \
   -e DISABLE_TENANCY=true \
   /scripts/mlflow_scale_test.js
@@ -211,7 +211,7 @@ k6 run \
 k6 run \
   -e MLFLOW_URL=https://mlflow.example.com \
   -e MLFLOW_TOKEN=sha256~xxx \
-  -e VUS=50 \
+  -e CONCURRENCY=50 \
   -e DURATION=5m \
   -e TENANT_COUNT=100 \
   /scripts/mlflow_scale_test.js

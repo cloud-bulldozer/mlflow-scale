@@ -4,7 +4,7 @@ MLflow Performance Test Report Generator
 
 Reads multiple k6 test result JSON files and generates:
 1. CSV summary with response times, pass/fail counts, and request rates
-2. Charts visualizing metrics across different VUs and tenant configurations
+2. Charts visualizing metrics across different concurrency and tenant configurations
 3. Resource utilization charts from Prometheus metrics CSV files
 """
 
@@ -46,7 +46,7 @@ def load_metrics_csv_files(pattern="metrics_*.csv"):
     
     all_metrics = []
     for filepath in files:
-        # Extract experiment name from filename (e.g., metrics_1_vus_10.csv -> 1_vus_10)
+        # Extract experiment name from filename (e.g., metrics_1_concurrency_10.csv -> 1_concurrency_10)
         filename = os.path.basename(filepath)
         match = re.match(r'metrics_(.+)\.(csv|log)', filename)
         if match:
@@ -70,15 +70,15 @@ def load_metrics_csv_files(pattern="metrics_*.csv"):
     # Combine all metrics into a single DataFrame
     metrics_df = pd.concat(all_metrics, ignore_index=True)
     
-    # Parse experiment name to extract tenants and vus if possible
-    # Expected format: {tenants}_vus_{vus} (e.g., "1_vus_10", "10_vus_50")
+    # Parse experiment name to extract tenants and concurrency if possible
+    # Expected format: {tenants}_concurrency_{concurrency} (e.g., "1_concurrency_10", "10_concurrency_50")
     def parse_experiment(exp):
-        match = re.match(r'(\d+)_vus_(\d+)', exp)
+        match = re.match(r'(\d+)_concurrency_(\d+)', exp)
         if match:
             return int(match.group(1)), int(match.group(2))
         return None, None
     
-    metrics_df[['tenants', 'vus']] = metrics_df['experiment'].apply(
+    metrics_df[['tenants', 'concurrency']] = metrics_df['experiment'].apply(
         lambda x: pd.Series(parse_experiment(x))
     )
     
@@ -91,7 +91,7 @@ def extract_metrics(summary):
     
     result = {
         'tenants': summary.get('tenants', 0),
-        'vus': summary.get('vus', 0),
+        'concurrency': summary.get('concurrency', 0),
         'mode': summary.get('mode', ''),
     }
     
@@ -137,8 +137,8 @@ def create_dataframe(summaries):
     records = [extract_metrics(s) for s in summaries]
     df = pd.DataFrame(records)
     
-    # Sort by tenants and vus
-    df = df.sort_values(['tenants', 'vus']).reset_index(drop=True)
+    # Sort by tenants and concurrency
+    df = df.sort_values(['tenants', 'concurrency']).reset_index(drop=True)
     
     return df
 
@@ -176,9 +176,9 @@ def _save_chart(filepath):
 
 
 def _add_config_column(df):
-    """Add a 'config' column with T{tenants}_V{vus} format."""
+    """Add a 'config' column with T{tenants}_C{concurrency} format."""
     df = df.copy()
-    df['config'] = df.apply(lambda r: f"T{r['tenants']}_V{r['vus']}", axis=1)
+    df['config'] = df.apply(lambda r: f"T{r['tenants']}_C{r['concurrency']}", axis=1)
     return df
 
 
@@ -217,11 +217,22 @@ def _plot_response_times_on_axis(ax, group, x_col, operations, metric_suffix, xl
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
+    ax.set_ylim(bottom=0)
     ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=8)
     ax.grid(True, alpha=0.3)
 
 
-def _plot_grouped_subplots(df, group_by, x_col, plot_func, filename, output_dir="."):
+def _safe_max(series):
+    """Return max of a Series/array, or None if empty/NaN."""
+    if series is None:
+        return None
+    max_val = pd.to_numeric(series, errors='coerce').max()
+    if pd.isna(max_val):
+        return None
+    return float(max_val)
+
+
+def _plot_grouped_subplots(df, group_by, x_col, plot_func, filename, output_dir=".", y_max=None):
     """Generic helper to create grouped subplot charts.
     
     Args:
@@ -231,6 +242,7 @@ def _plot_grouped_subplots(df, group_by, x_col, plot_func, filename, output_dir=
         plot_func: Function(ax, group, x_col, group_value) to plot on each axis
         filename: Output filename
         output_dir: Output directory
+        y_max: Optional max y-axis value to apply to all subplots
     """
     groups = df.groupby(group_by)
     num_groups = len(groups)
@@ -243,45 +255,55 @@ def _plot_grouped_subplots(df, group_by, x_col, plot_func, filename, output_dir=
     for idx, (group_value, group) in enumerate(groups):
         group = group.sort_values(x_col)
         plot_func(axes[0, idx], group, x_col, group_value)
+        if y_max is not None and np.isfinite(y_max):
+            axes[0, idx].set_ylim(top=y_max)
     
     _save_chart(os.path.join(output_dir, filename))
 
 
-def plot_response_times_by_vus(df, output_dir="."):
-    """Plot P95 response times vs VUs for each tenant configuration."""
+def plot_response_times_by_concurrency(df, output_dir="."):
+    """Plot P95 response times vs concurrency for each tenant configuration."""
     operations = get_operation_names(df)
+    p95_cols = [f'{op}_p95_ms' for op in operations if f'{op}_p95_ms' in df.columns]
+    y_max = _safe_max(df[p95_cols].max().max()) if p95_cols else None
+    if y_max is not None:
+        y_max *= 1.1
     
     def plot_func(ax, group, x_col, tenants):
         _plot_response_times_on_axis(
             ax, group, x_col, operations, '_p95_ms',
-            'Virtual Users (VUs)', 'P95 Response Time (ms)',
+            'Concurrency', 'P95 Response Time (ms)',
             f'P95 Response Times - {tenants} Tenant(s)'
         )
     
-    _plot_grouped_subplots(df, 'tenants', 'vus', plot_func, 
-                           'chart_response_times_by_vus.png', output_dir)
+    _plot_grouped_subplots(df, 'tenants', 'concurrency', plot_func, 
+                           'chart_response_times_by_concurrency.png', output_dir, y_max=y_max)
 
 
 def plot_response_times_by_tenants(df, output_dir="."):
-    """Plot P95 response times vs tenants for each VU configuration."""
+    """Plot P95 response times vs tenants for each concurrency configuration."""
     operations = get_operation_names(df)
+    p95_cols = [f'{op}_p95_ms' for op in operations if f'{op}_p95_ms' in df.columns]
+    y_max = _safe_max(df[p95_cols].max().max()) if p95_cols else None
+    if y_max is not None:
+        y_max *= 1.1
     
-    def plot_func(ax, group, x_col, vus):
+    def plot_func(ax, group, x_col, concurrency):
         _plot_response_times_on_axis(
             ax, group, x_col, operations, '_p95_ms',
             'Tenants', 'P95 Response Time (ms)',
-            f'P95 Response Times - {vus} VUs'
+            f'P95 Response Times - {concurrency} Concurrency'
         )
     
-    _plot_grouped_subplots(df, 'vus', 'tenants', plot_func,
-                           'chart_response_times_by_tenants.png', output_dir)
+    _plot_grouped_subplots(df, 'concurrency', 'tenants', plot_func,
+                           'chart_response_times_by_tenants.png', output_dir, y_max=y_max)
 
 
 def _plot_heatmap(df, value_col, title, colorbar_label, filename, output_dir=".", value_format=".1f"):
-    """Generic helper to plot a heatmap of tenants vs VUs.
+    """Generic helper to plot a heatmap of tenants vs concurrency.
     
     Args:
-        df: DataFrame with 'tenants', 'vus', and value_col columns
+        df: DataFrame with 'tenants', 'concurrency', and value_col columns
         value_col: Column name to use for heatmap values
         title: Chart title
         colorbar_label: Label for the colorbar
@@ -292,7 +314,7 @@ def _plot_heatmap(df, value_col, title, colorbar_label, filename, output_dir="."
     if value_col not in df.columns:
         return
     
-    pivot = df.pivot_table(index='tenants', columns='vus', values=value_col, aggfunc='mean')
+    pivot = df.pivot_table(index='tenants', columns='concurrency', values=value_col, aggfunc='mean')
     
     if pivot.empty:
         return
@@ -306,7 +328,7 @@ def _plot_heatmap(df, value_col, title, colorbar_label, filename, output_dir="."
     ax.set_yticks(range(len(pivot.index)))
     ax.set_yticklabels(pivot.index)
     
-    ax.set_xlabel('Virtual Users (VUs)')
+    ax.set_xlabel('Concurrency')
     ax.set_ylabel('Tenants')
     ax.set_title(title)
     
@@ -322,7 +344,7 @@ def _plot_heatmap(df, value_col, title, colorbar_label, filename, output_dir="."
 
 
 def plot_throughput_heatmap(df, output_dir="."):
-    """Plot HTTP request rate as a heatmap of tenants vs VUs."""
+    """Plot HTTP request rate as a heatmap of tenants vs concurrency."""
     _plot_heatmap(
         df, 'http_reqs_rate',
         title='HTTP Request Rate (req/s)',
@@ -355,7 +377,7 @@ def plot_passed_counts(df, output_dir="."):
         op_name = col.replace('_passed', '')
         ax.bar(x + offset, df[col], width, label=op_name, color=colors[i])
     
-    ax.set_xlabel('Test Configuration (T=Tenants, V=VUs)')
+    ax.set_xlabel('Test Configuration (T=Tenants, C=Concurrency)')
     ax.set_ylabel('Passed Count')
     ax.set_title('Successful Operations by Configuration')
     ax.set_xticks(x)
@@ -367,7 +389,7 @@ def plot_passed_counts(df, output_dir="."):
 
 
 def plot_response_times_p95_heatmap(df, output_dir="."):
-    """Plot overall P95 response time as a heatmap of tenants vs VUs."""
+    """Plot overall P95 response time as a heatmap of tenants vs concurrency."""
     # Calculate overall P95 as mean of all operation P95s
     operations = get_operation_names(df)
     p95_cols = [f'{op}_p95_ms' for op in operations if f'{op}_p95_ms' in df.columns]
@@ -435,6 +457,20 @@ def plot_summary_dashboard(df, output_dir="."):
     _save_chart(os.path.join(output_dir, 'chart_summary_dashboard.png'))
 
 
+def _sort_experiments_numerically(experiments):
+    """Sort experiment names numerically by tenants and concurrency.
+    
+    Expected format: {tenants}_concurrency_{concurrency} (e.g., "1_concurrency_10", "10_concurrency_50")
+    """
+    def parse_key(exp):
+        match = re.match(r'(\d+)_concurrency_(\d+)', exp)
+        if match:
+            return (int(match.group(1)), int(match.group(2)))
+        return (float('inf'), float('inf'))  # Put unparseable at end
+    
+    return sorted(experiments, key=parse_key)
+
+
 def _plot_resource_utilization(metrics_df, metric_name, ylabel, title, filename, output_dir=".",
                                 value_transform=None, alt_metric_names=None):
     """Generic helper to plot avg resource utilization (CPU or memory) across experiments.
@@ -476,7 +512,7 @@ def _plot_resource_utilization(metrics_df, metric_name, ylabel, title, filename,
     
     # Get unique components and experiments
     components = filtered_df['component'].unique()
-    experiments = sorted(filtered_df['experiment'].unique())
+    experiments = _sort_experiments_numerically(filtered_df['experiment'].unique())
     
     fig, ax = plt.subplots(figsize=(12, 6))
     
@@ -500,6 +536,8 @@ def _plot_resource_utilization(metrics_df, metric_name, ylabel, title, filename,
     ax.set_xlabel('Experiment')
     ax.set_ylabel(ylabel)
     ax.set_title(title)
+    if metric_name == 'cpu':
+        ax.set_ylim(bottom=0)
     ax.set_xticks(x)
     ax.set_xticklabels(experiments, rotation=45, ha='right')
     ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=8)
@@ -570,35 +608,42 @@ def _plot_mlflow_cpu_on_axis(ax, group, x_col, xlabel, title):
     ax.set_xlabel(xlabel)
     ax.set_ylabel('CPU (cores)')
     ax.set_title(title)
+    ax.set_ylim(bottom=0)
     ax.grid(True, alpha=0.3)
 
 
-def plot_mlflow_cpu_by_vus(metrics_df, output_dir="."):
-    """Plot MLflow avg CPU utilization vs VUs for each tenant configuration."""
+def plot_mlflow_cpu_by_concurrency(metrics_df, output_dir="."):
+    """Plot MLflow avg CPU utilization vs concurrency for each tenant configuration."""
     mlflow_cpu = _prepare_mlflow_cpu_data(metrics_df)
     if mlflow_cpu is None:
         return
+    y_max = _safe_max(mlflow_cpu['mlflow_cpu'])
+    if y_max is not None:
+        y_max *= 1.1
     
     def plot_func(ax, group, x_col, tenants):
-        _plot_mlflow_cpu_on_axis(ax, group, x_col, 'Virtual Users (VUs)',
+        _plot_mlflow_cpu_on_axis(ax, group, x_col, 'Concurrency',
                                   f'MLflow Avg CPU - {tenants} Tenant(s)')
     
-    _plot_grouped_subplots(mlflow_cpu, 'tenants', 'vus', plot_func,
-                           'chart_mlflow_cpu_by_vus.png', output_dir)
+    _plot_grouped_subplots(mlflow_cpu, 'tenants', 'concurrency', plot_func,
+                           'chart_mlflow_cpu_by_concurrency.png', output_dir, y_max=y_max)
 
 
 def plot_mlflow_cpu_by_tenants(metrics_df, output_dir="."):
-    """Plot MLflow avg CPU utilization vs tenants for each VU configuration."""
+    """Plot MLflow avg CPU utilization vs tenants for each concurrency configuration."""
     mlflow_cpu = _prepare_mlflow_cpu_data(metrics_df)
     if mlflow_cpu is None:
         return
+    y_max = _safe_max(mlflow_cpu['mlflow_cpu'])
+    if y_max is not None:
+        y_max *= 1.1
     
-    def plot_func(ax, group, x_col, vus):
+    def plot_func(ax, group, x_col, concurrency):
         _plot_mlflow_cpu_on_axis(ax, group, x_col, 'Tenants',
-                                  f'MLflow Avg CPU - {vus} VUs')
+                                  f'MLflow Avg CPU - {concurrency} Concurrency')
     
-    _plot_grouped_subplots(mlflow_cpu, 'vus', 'tenants', plot_func,
-                           'chart_mlflow_cpu_by_tenants.png', output_dir)
+    _plot_grouped_subplots(mlflow_cpu, 'concurrency', 'tenants', plot_func,
+                           'chart_mlflow_cpu_by_tenants.png', output_dir, y_max=y_max)
 
 
 def main():
@@ -632,7 +677,7 @@ def main():
     df = create_dataframe(summaries)
     print(f"\nExtracted metrics for {len(df)} test configurations")
     print(f"Tenants: {sorted(df['tenants'].unique())}")
-    print(f"VUs: {sorted(df['vus'].unique())}")
+    print(f"Concurrency: {sorted(df['concurrency'].unique())}")
     
     # Save CSV
     csv_path = os.path.join(args.output_dir, args.csv_name)
@@ -642,7 +687,7 @@ def main():
     print("\n" + "=" * 60)
     print("Summary Table:")
     print("=" * 60)
-    display_cols = ['tenants', 'vus', 'http_reqs_total', 'http_reqs_rate']
+    display_cols = ['tenants', 'concurrency', 'http_reqs_total', 'http_reqs_rate']
     display_cols = [c for c in display_cols if c in df.columns]
     print(df[display_cols].to_string(index=False))
     
@@ -652,7 +697,7 @@ def main():
     print("=" * 60)
     
     plot_summary_dashboard(df, args.output_dir)
-    plot_response_times_by_vus(df, args.output_dir)
+    plot_response_times_by_concurrency(df, args.output_dir)
     plot_response_times_by_tenants(df, args.output_dir)
     plot_throughput_heatmap(df, args.output_dir)
     plot_passed_counts(df, args.output_dir)
@@ -674,7 +719,7 @@ def main():
         print("\nGenerating resource utilization charts...")
         plot_cpu_utilization(metrics_df, args.output_dir)
         plot_memory_utilization(metrics_df, args.output_dir)
-        plot_mlflow_cpu_by_vus(metrics_df, args.output_dir)
+        plot_mlflow_cpu_by_concurrency(metrics_df, args.output_dir)
         plot_mlflow_cpu_by_tenants(metrics_df, args.output_dir)
     else:
         print("No Prometheus metrics files found - skipping resource utilization charts")

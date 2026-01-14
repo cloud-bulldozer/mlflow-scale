@@ -23,8 +23,8 @@ MLFLOW_POD_LABEL="${MLFLOW_POD_LABEL:-mlflow.*}"
 MLFLOW_NAMESPACE="${MLFLOW_NAMESPACE:-opendatahub}"
 
 # Test configuration
-TENANCY_MODES=("1" "10" "100" "1000")
-VU_LEVELS=(10 20 40 100)
+TENANCY_MODES=("1" "10" "100" "500")
+CONCURRENCY_LEVELS=(5 10 20 50)
 TEST_DURATION="${TEST_DURATION:-10m}"
 
 # MLflow configuration
@@ -130,16 +130,16 @@ start_k6_pod() {
 
 run_k6_test() {
     local mode=$1
-    local vus=$2
-    local test_id="${mode}_vus_${vus}"
+    local concurrency=$2
+    local test_id="${mode}_concurrency_${concurrency}"
     
-    log_info "Running k6 test: Mode=${mode}, VUs=${vus}"
+    log_info "Running k6 test: Mode=${mode}, Concurrency=${concurrency}"
     
     local k6_cmd=""
     if [[ "${mode}" == "baseline" ]]; then
-        k6_cmd="k6 run -e DISABLE_TENANCY=true -e VUS=${vus} -e DURATION=${TEST_DURATION}"
+        k6_cmd="k6 run -e DISABLE_TENANCY=true -e CONCURRENCY=${concurrency} -e DURATION=${TEST_DURATION}"
     else
-        k6_cmd="k6 run -e TENANT_COUNT=${mode} -e VUS=${vus} -e DURATION=${TEST_DURATION}"
+        k6_cmd="k6 run -e TENANT_COUNT=${mode} -e CONCURRENCY=${concurrency} -e DURATION=${TEST_DURATION}"
     fi
     
     # Add MLflow URL and token if provided
@@ -194,13 +194,13 @@ run_mlflow_cleanup() {
 
 copy_results_from_pod() {
     local mode=$1
-    local vus=$2
+    local concurrency=$2
     
     local summary_filename
     if [[ "${mode}" == "baseline" ]]; then
-        summary_filename="summary_baseline_vus_${vus}.json"
+        summary_filename="summary_baseline_concurrency_${concurrency}.json"
     else
-        summary_filename="summary_tenants-${mode}_vus_${vus}.json"
+        summary_filename="summary_tenants-${mode}_concurrency_${concurrency}.json"
     fi
     
     log_info "Copying result file: ${summary_filename}"
@@ -297,7 +297,7 @@ main() {
     log_info "Namespace: ${NAMESPACE}"
     log_info "Test duration: ${TEST_DURATION}"
     log_info "Tenancy modes: ${TENANCY_MODES[*]}"
-    log_info "VU levels: ${VU_LEVELS[*]}"
+    log_info "Concurrency levels: ${CONCURRENCY_LEVELS[*]}"
     
     # Create results directory
     mkdir -p "${RESULTS_DIR}"
@@ -313,14 +313,16 @@ main() {
     # Run test suite
     log_section "Running Test Suite"
     local test_count=0
-    local total_tests=$(( ${#TENANCY_MODES[@]} * ${#VU_LEVELS[@]} ))
+    local total_tests=$(( ${#TENANCY_MODES[@]} * ${#CONCURRENCY_LEVELS[@]} ))
     
     for mode in "${TENANCY_MODES[@]}"; do
-        for vus in "${VU_LEVELS[@]}"; do
+        # Ensure required tenant namespaces exist for this test
+        ensure_tenant_namespaces "${mode}"
+        for concurrency in "${CONCURRENCY_LEVELS[@]}"; do
             ((test_count++))
 
-            local test_id="${mode}_vus_${vus}"
-            log_section "Test ${test_count}/${total_tests}: Mode=${mode}, VUs=${vus}"
+            local test_id="${mode}_concurrency_${concurrency}"
+            log_section "Test ${test_count}/${total_tests}: Mode=${mode}, Concurrency=${concurrency}"
             
             # Run cleanup - ensure a clean MLflow instance
             if ! run_mlflow_cleanup; then
@@ -328,21 +330,18 @@ main() {
                 continue
             fi
             
-            # Ensure required tenant namespaces exist for this test
-            ensure_tenant_namespaces "${mode}"
-            
             # Record start time for Prometheus query
             local start_time
             start_time=$(date +%s)
             
             # Run the k6 test
-            if run_k6_test "${mode}" "${vus}"; then
+            if run_k6_test "${mode}" "${concurrency}"; then
                 # Record end time
                 local end_time
                 end_time=$(date +%s)
                 
                 # Copy results from pod
-                copy_results_from_pod "${mode}" "${vus}"
+                copy_results_from_pod "${mode}" "${concurrency}"
                 
                 # Collect Prometheus metrics
                 collect_prometheus_metrics "${start_time}" "${end_time}" "${test_id}" || \
@@ -390,7 +389,7 @@ Environment Variables:
   TEST_DURATION        Duration for each test (passed to k6 as DURATION, default: 10m)
 
 K6 Test Variables (passed automatically based on test matrix):
-  VUS                  Virtual users count (from VU_LEVELS array)
+  CONCURRENCY          Concurrent users count (from CONCURRENCY_LEVELS array)
   TENANT_COUNT         Number of tenants (from TENANCY_MODES array)
   DISABLE_TENANCY      Set to 'true' for baseline tests
 

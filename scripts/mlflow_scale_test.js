@@ -11,7 +11,7 @@ const AUTH_TOKEN = __ENV.MLFLOW_TOKEN || 'NO_TOKEN_PROVIDED';
 
 const DISABLE_TENANCY = __ENV.DISABLE_TENANCY === 'true';
 const TENANT_COUNT = parseInt(__ENV.TENANT_COUNT || '1');
-const TOTAL_VUS = parseInt(__ENV.VUS || '10');
+const TOTAL_CONCURRENCY = parseInt(__ENV.CONCURRENCY || '10');
 
 // Custom metrics for response times
 const responseTimeMetrics = {
@@ -50,14 +50,14 @@ export const options = {
     scenarios: {
         training: {
             executor: 'constant-vus',
-            vus: Math.floor(TOTAL_VUS * 0.2), // 20% Writes
+            vus: Math.floor(TOTAL_CONCURRENCY * 0.2), // 20% Writes
             duration: __ENV.DURATION || '1m',
             gracefulStop: '10s',
             exec: 'trainingScenario',
         },
         browsing: {
             executor: 'constant-vus',
-            vus: Math.ceil(TOTAL_VUS * 0.8),  // 80% Reads
+            vus: Math.ceil(TOTAL_CONCURRENCY * 0.8),  // 80% Reads
             duration: __ENV.DURATION || '1m',
             gracefulStop: '10s',
             exec: 'browsingScenario',
@@ -255,11 +255,11 @@ export function browsingScenario() {
 
 export function handleSummary(data) {
     const mode = DISABLE_TENANCY ? 'baseline' : `tenants-${TENANT_COUNT}`;
-    const filename = `/tmp/summary_${mode}_vus_${TOTAL_VUS}.json`;
+    const filename = `/tmp/summary_${mode}_concurrency_${TOTAL_CONCURRENCY}.json`;
     
     const summary = {
         mode: mode,
-        vus: TOTAL_VUS,
+        concurrency: TOTAL_CONCURRENCY,
         tenants: TENANT_COUNT,
         data: data,
         timestamp: new Date().toISOString()
