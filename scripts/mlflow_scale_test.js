@@ -3,6 +3,7 @@ import { check } from 'k6';
 import encoding from 'k6/encoding';
 import { Trend, Counter } from 'k6/metrics';
 import { uuidv4 } from 'https://jslib.k6.io/k6-utils/1.4.0/index.js';
+import { sleep } from 'k6';
 
 // --- CONFIGURATION ---
 const BASE_URL = __ENV.MLFLOW_URL || 'NO_URL_PROVIDED';
@@ -138,8 +139,8 @@ export function trainingScenario() {
                     validateResponse(metricRes, 'log_metric');
                 }
                 
-                // Log 3 random parameters
-                for (let j = 1; j <= 3; j++) {
+                // Log 5 random parameters
+                for (let j = 1; j <= 5; j++) {
                     const paramRes = http.post(`${BASE_URL}${API_PREFIX}/runs/log-parameter`,
                         JSON.stringify({ run_id: runId, key: `param${j}`, value: String(Math.random()) }),
                         { ...config, tags: { name: 'log_parameter' } });
@@ -185,6 +186,7 @@ export function trainingScenario() {
             }
         }
     }
+    sleep(1);
 }
 
 // --- TASK: UI BROWSING (READS) ---
@@ -199,8 +201,8 @@ export function browsingScenario() {
     }
     const exps = searchExpRes.json().experiments || [];
 
-    // Iterate through the first 10 experiments
-    const maxExps = Math.min(exps.length, 10);
+    // Iterate through 5 experiments
+    const maxExps = Math.min(exps.length, 5);
     for (let i = 0; i < maxExps; i++) {
         const targetExpId = exps[i].experiment_id;
 
@@ -220,8 +222,8 @@ export function browsingScenario() {
         }
 
         const runs = runSearch.json().runs || [];
-        // Iterate through the first 10 runs in each experiment
-        const maxRuns = Math.min(runs.length, 10);
+        // Iterate through 3 runs in each experiment
+        const maxRuns = Math.min(runs.length, 3);
         for (let j = 0; j < maxRuns; j++) {
             const targetRunId = runs[j].info.run_id;
             const getRunRes = http.get(`${BASE_URL}${API_PREFIX}/runs/get?run_id=${targetRunId}`, 
@@ -251,6 +253,7 @@ export function browsingScenario() {
             }
         }
     }
+    sleep(1);
 }
 
 export function handleSummary(data) {
