@@ -30,6 +30,7 @@ const responseTimeMetrics = {
     get_run: new Trend('get_run_response_time'),
     list_artifacts: new Trend('list_artifacts_response_time'),
     fetch_artifact: new Trend('fetch_artifact_response_time'),
+    list_workspaces: new Trend('list_workspaces_response_time'),
 };
 
 // Counter metrics for pass/fail counts
@@ -49,6 +50,7 @@ const statusCounters = {
     get_run: { passed: new Counter('get_run_passed'), failed: new Counter('get_run_failed') },
     list_artifacts: { passed: new Counter('list_artifacts_passed'), failed: new Counter('list_artifacts_failed') },
     fetch_artifact: { passed: new Counter('fetch_artifact_passed'), failed: new Counter('fetch_artifact_failed') },
+    list_workspaces: { passed: new Counter('list_workspaces_passed'), failed: new Counter('list_workspaces_failed') },
 };
 
 // Workload configuration
@@ -235,6 +237,11 @@ export function trainingScenario() {
 // --- TASK: UI BROWSING (READS) ---
 export function browsingScenario() {
     const config = { headers: getHeaders() };
+
+    // List Workspaces
+    const listWorkspacesRes = http.get(`${BASE_URL}/mlflow/api/2.0/mlflow/workspaces`,
+        { ...config, tags: { name: 'list_workspaces' } });
+    validateResponse(listWorkspacesRes, 'list_workspaces');
 
     // Search Prompts
     const searchPromptsRes = http.post(

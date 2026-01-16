@@ -126,6 +126,7 @@ Simulates users browsing MLflow UI:
 
 | Operation | Description |
 |-----------|-------------|
+| `list_workspaces` | List available workspaces/tenants |
 | `search_prompts` | Search prompts (up to 100 results) |
 | `search_experiments` | List up to 25 experiments |
 | `get_experiment` | Fetch experiment details |
