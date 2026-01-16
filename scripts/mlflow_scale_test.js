@@ -239,17 +239,13 @@ export function browsingScenario() {
     const config = { headers: getHeaders() };
 
     // List Workspaces
-    const listWorkspacesRes = http.get(`${BASE_URL}/mlflow/api/2.0/mlflow/workspaces`,
+    const listWorkspacesRes = http.get(`${BASE_URL}${API_PREFIX}/workspaces`,
         { ...config, tags: { name: 'list_workspaces' } });
     validateResponse(listWorkspacesRes, 'list_workspaces');
 
     // Search Prompts
-    const searchPromptsRes = http.post(
-        `${BASE_URL}${API_PREFIX}/registered-models/search`,
-        JSON.stringify({
-            filter_string: "tags.`mlflow.prompt.is_prompt` = 'true'",
-            max_results: 100,
-        }),
+    const searchPromptsRes = http.get(
+        `${BASE_URL}${API_PREFIX}/registered-models/search?filter=tags.%60mlflow.prompt.is_prompt%60+%3D+%27true%27`,
         { ...config, tags: { name: 'search_prompts' } }
     );
     validateResponse(searchPromptsRes, 'search_prompts');
