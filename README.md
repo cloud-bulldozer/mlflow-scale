@@ -2,7 +2,7 @@
 
 > 🚀 Automated performance & scalability testing for MLflow with multi-tenant workspaces on OpenShift/Kubernetes
 
-A comprehensive collection of scripts for running performance & scale tests for MLflow with the workspaces multi-tenancy feature. This project automates the deployment of MLflow, test artifacts deployment, running a series of tests, collecting results, and providing CSV summary along with charts.
+A comprehensive collection of scripts for running performance & scale tests for MLflow with the workspaces multi-tenancy feature. This project automates the deployment of MLflow, test artifacts deployment, prefilling the test data, running a series of tests, collecting results, and providing CSV summary along with charts.
 
 ---
 
@@ -94,9 +94,9 @@ ls scripts/results/
 The default test matrix can be modified in `run_suite.sh`:
 
 ```bash
-TENANCY_MODES=("1" "10" "100" "500")  # Number of tenants
-CONCURRENCY_LEVELS=(5 10 20)           # Concurrency per test
-TEST_DURATION="10m"                      # Duration per test
+TENANT_COUNTS=("1" "10" "100" "500")  # Number of tenants
+CONCURRENCY_LEVELS=(5 10 20)          # Concurrency per test
+TEST_DURATION="10m"                   # Duration per test
 ```
 
 ---
@@ -112,9 +112,11 @@ Simulates ML training pipelines writing to MLflow:
 | Operation | Description |
 |-----------|-------------|
 | `create_experiment` | Create a new experiment |
+| `create_prompt` | Create 3 prompts per experiment |
+| `create_prompt_version` | Create version for each prompt |
 | `create_run` | Start 3 runs per experiment |
 | `log_metric` | Log 3 metrics per run |
-| `log_parameter` | Log 3 parameters per run |
+| `log_parameter` | Log 5 parameters per run |
 | `log_artifact` | Upload 2 artifacts (~10KB each) |
 | `update_run_status` | Mark run as FINISHED |
 
@@ -124,6 +126,7 @@ Simulates users browsing MLflow UI:
 
 | Operation | Description |
 |-----------|-------------|
+| `search_prompts` | Search prompts (up to 100 results) |
 | `search_experiments` | List up to 25 experiments |
 | `get_experiment` | Fetch experiment details |
 | `search_runs` | Search runs in experiment |
@@ -161,8 +164,9 @@ mlflow-scale/
 │   └── MLflow_Postgres.yml       # PostgreSQL backend config
 │
 ├── scripts/
-│   ├── run_suite.sh          # Main test suite orchestrator
+│   ├── run_suite.sh              # Main test suite orchestrator
 │   ├── mlflow_scale_test.js      # k6 load test script
+│   ├── mlflow_prefill_tenants.js # k6 script to prefill tenant data
 │   ├── collect_metrics.sh        # Prometheus metrics collector
 │   ├── report_summary.py         # Report & chart generator
 │   ├── k6-pod.yml                # k6 pod specification
@@ -198,13 +202,13 @@ python3 ../report_summary.py \
 # Exec into the k6 pod
 oc exec -it k6-benchmark -n opendatahub -- sh
 
-# Run a baseline test (no tenancy)
+# Run a single tenant test
 k6 run \
   -e MLFLOW_URL=https://mlflow.example.com \
   -e MLFLOW_TOKEN=sha256~xxx \
   -e CONCURRENCY=10 \
   -e DURATION=5m \
-  -e DISABLE_TENANCY=true \
+  -e TENANT_COUNT=1 \
   /scripts/mlflow_scale_test.js
 
 # Run a multi-tenant test

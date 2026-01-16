@@ -23,7 +23,7 @@ MLFLOW_POD_LABEL="${MLFLOW_POD_LABEL:-mlflow.*}"
 MLFLOW_NAMESPACE="${MLFLOW_NAMESPACE:-opendatahub}"
 
 # Test configuration
-TENANCY_MODES=("1" "10" "100" "500")
+TENANT_COUNTS=("1" "10" "100" "500")
 CONCURRENCY_LEVELS=(5 10 20 50)
 TEST_DURATION="${TEST_DURATION:-10m}"
 
@@ -71,14 +71,7 @@ cleanup_on_exit() {
 # ========================================
 
 ensure_tenant_namespaces() {
-    local mode=$1
-    
-    # Skip namespace creation for baseline mode
-    if [[ "${mode}" == "baseline" ]]; then
-        return 0
-    fi
-    
-    local required_count="${mode}"
+    local required_count=$1
     log_info "Ensuring ${required_count} tenant namespace(s) exist..."
     
     for i in $(seq 1 "${required_count}"); do
@@ -100,9 +93,10 @@ setup_k6_configmap() {
     # Delete existing configmap if present
     oc delete configmap k6-loadtest-script -n "${NAMESPACE}" --ignore-not-found=true 2>/dev/null || true
     
-    # Create configmap from the test script
+    # Create configmap from the test scripts
     oc create configmap k6-loadtest-script \
         --from-file=mlflow_scale_test.js="${SCRIPT_DIR}/mlflow_scale_test.js" \
+        --from-file=mlflow_prefill_tenants.js="${SCRIPT_DIR}/mlflow_prefill_tenants.js" \
         -n "${NAMESPACE}"
     
     log_info "ConfigMap created successfully"
@@ -129,18 +123,13 @@ start_k6_pod() {
 }
 
 run_k6_test() {
-    local mode=$1
+    local tenant_count=$1
     local concurrency=$2
-    local test_id="${mode}_concurrency_${concurrency}"
+    local test_id="${tenant_count}_concurrency_${concurrency}"
     
-    log_info "Running k6 test: Mode=${mode}, Concurrency=${concurrency}"
+    log_info "Running k6 test: Tenants=${tenant_count}, Concurrency=${concurrency}"
     
-    local k6_cmd=""
-    if [[ "${mode}" == "baseline" ]]; then
-        k6_cmd="k6 run -e DISABLE_TENANCY=true -e CONCURRENCY=${concurrency} -e DURATION=${TEST_DURATION}"
-    else
-        k6_cmd="k6 run -e TENANT_COUNT=${mode} -e CONCURRENCY=${concurrency} -e DURATION=${TEST_DURATION}"
-    fi
+    local k6_cmd="k6 run -e TENANT_COUNT=${tenant_count} -e CONCURRENCY=${concurrency} -e DURATION=${TEST_DURATION}"
     
     # Add MLflow URL and token if provided
     if [[ -n "${MLFLOW_URL}" ]]; then
@@ -156,6 +145,33 @@ run_k6_test() {
     oc exec "${K6_POD_NAME}" -n "${NAMESPACE}" -- sh -c "${k6_cmd}"
     
     log_info "K6 test completed: ${test_id}"
+}
+
+run_prefill_tenants() {
+    local tenant_count=$1
+    
+    log_info "Prefilling data for ${tenant_count} tenant(s)..."
+    
+    local k6_cmd="k6 run -e TENANT_COUNT=${tenant_count} --no-summary"
+    
+    # Add MLflow URL and token if provided
+    if [[ -n "${MLFLOW_URL}" ]]; then
+        k6_cmd="${k6_cmd} -e MLFLOW_URL=${MLFLOW_URL}"
+    fi
+    if [[ -n "${MLFLOW_TOKEN}" ]]; then
+        k6_cmd="${k6_cmd} -e MLFLOW_TOKEN=${MLFLOW_TOKEN}"
+    fi
+    
+    k6_cmd="${k6_cmd} /scripts/mlflow_prefill_tenants.js --insecure-skip-tls-verify"
+    
+    # Execute the prefill script in the k6 pod
+    if oc exec "${K6_POD_NAME}" -n "${NAMESPACE}" -- sh -c "${k6_cmd}"; then
+        log_info "Prefilling data for ${tenant_count} tenant(s) completed"
+        return 0
+    else
+        log_error "Prefilling data for ${tenant_count} tenant(s) failed"
+        return 1
+    fi
 }
 
 run_mlflow_cleanup() {
@@ -193,15 +209,10 @@ run_mlflow_cleanup() {
 }
 
 copy_results_from_pod() {
-    local mode=$1
+    local tenant_count=$1
     local concurrency=$2
     
-    local summary_filename
-    if [[ "${mode}" == "baseline" ]]; then
-        summary_filename="summary_baseline_concurrency_${concurrency}.json"
-    else
-        summary_filename="summary_tenants-${mode}_concurrency_${concurrency}.json"
-    fi
+    local summary_filename="summary_tenants-${tenant_count}_concurrency_${concurrency}.json"
     
     log_info "Copying result file: ${summary_filename}"
     
@@ -296,7 +307,7 @@ main() {
     log_info "Results directory: ${RESULTS_DIR}"
     log_info "Namespace: ${NAMESPACE}"
     log_info "Test duration: ${TEST_DURATION}"
-    log_info "Tenancy modes: ${TENANCY_MODES[*]}"
+    log_info "Tenant counts: ${TENANT_COUNTS[*]}"
     log_info "Concurrency levels: ${CONCURRENCY_LEVELS[*]}"
     
     # Create results directory
@@ -313,35 +324,42 @@ main() {
     # Run test suite
     log_section "Running Test Suite"
     local test_count=0
-    local total_tests=$(( ${#TENANCY_MODES[@]} * ${#CONCURRENCY_LEVELS[@]} ))
+    local total_tests=$(( ${#TENANT_COUNTS[@]} * ${#CONCURRENCY_LEVELS[@]} ))
     
-    for mode in "${TENANCY_MODES[@]}"; do
+    for tenant_count in "${TENANT_COUNTS[@]}"; do
         # Ensure required tenant namespaces exist for this test
-        ensure_tenant_namespaces "${mode}"
+        ensure_tenant_namespaces "${tenant_count}"
+
+        # Run cleanup - ensure a clean MLflow instance
+        if ! run_mlflow_cleanup; then
+           log_error "Failed to cleanup MLflow before test suite"
+           exit 1
+        fi
+        
+        # Prefill MLflow data
+        if ! run_prefill_tenants "${tenant_count}"; then
+            log_error "Failed to prefill MLflow data for ${tenant_count} tenant(s)"
+            exit 1
+        fi
+        
         for concurrency in "${CONCURRENCY_LEVELS[@]}"; do
             ((test_count++))
 
-            local test_id="${mode}_concurrency_${concurrency}"
-            log_section "Test ${test_count}/${total_tests}: Mode=${mode}, Concurrency=${concurrency}"
-            
-            # Run cleanup - ensure a clean MLflow instance
-            if ! run_mlflow_cleanup; then
-                log_error "Failed to cleanup before ${test_id}"
-                continue
-            fi
-            
+            local test_id="${tenant_count}_concurrency_${concurrency}"
+            log_section "Test ${test_count}/${total_tests}: Tenants=${tenant_count}, Concurrency=${concurrency}"
+                        
             # Record start time for Prometheus query
             local start_time
             start_time=$(date +%s)
             
             # Run the k6 test
-            if run_k6_test "${mode}" "${concurrency}"; then
+            if run_k6_test "${tenant_count}" "${concurrency}"; then
                 # Record end time
                 local end_time
                 end_time=$(date +%s)
                 
                 # Copy results from pod
-                copy_results_from_pod "${mode}" "${concurrency}"
+                copy_results_from_pod "${tenant_count}" "${concurrency}"
                 
                 # Collect Prometheus metrics
                 collect_prometheus_metrics "${start_time}" "${end_time}" "${test_id}" || \
@@ -390,8 +408,7 @@ Environment Variables:
 
 K6 Test Variables (passed automatically based on test matrix):
   CONCURRENCY          Concurrent users count (from CONCURRENCY_LEVELS array)
-  TENANT_COUNT         Number of tenants (from TENANCY_MODES array)
-  DISABLE_TENANCY      Set to 'true' for baseline tests
+  TENANT_COUNT         Number of tenants (from TENANT_COUNTS array)
 
 Examples:
   # Run with defaults

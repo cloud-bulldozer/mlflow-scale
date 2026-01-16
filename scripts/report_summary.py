@@ -92,7 +92,6 @@ def extract_metrics(summary):
     result = {
         'tenants': summary.get('tenants', 0),
         'concurrency': summary.get('concurrency', 0),
-        'mode': summary.get('mode', ''),
     }
     
     # Process all metrics in a single pass
@@ -193,33 +192,23 @@ def get_operation_names(df):
     return sorted(ops)
 
 
-def _plot_response_times_on_axis(ax, group, x_col, operations, metric_suffix, xlabel, ylabel, title):
-    """Helper to plot response times on a single axis.
-    
-    Args:
-        ax: Matplotlib axis to plot on
-        group: DataFrame with the data to plot
-        x_col: Column name for x-axis values
-        operations: List of operation names
-        metric_suffix: Suffix for metric columns (e.g., '_avg_ms' or '_p95_ms')
-        xlabel: Label for x-axis
-        ylabel: Label for y-axis
-        title: Chart title
-    """
-    for op_idx, op in enumerate(operations):
-        color = DISTINCT_COLORS[op_idx % len(DISTINCT_COLORS)]
-        marker = MARKERS[op_idx % len(MARKERS)]
-        col = f'{op}{metric_suffix}'
-        if col in group.columns:
-            ax.plot(group[x_col], group[col], marker=marker, linestyle='-',
-                    label=op, color=color, markersize=8, linewidth=2)
-    
+def _setup_line_axis(ax, xlabel, ylabel, title, show_legend=True):
+    """Configure common axis properties for line plots."""
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
     ax.set_ylim(bottom=0)
-    ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=8)
+    if show_legend:
+        ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=8)
     ax.grid(True, alpha=0.3)
+
+
+def _plot_multi_series(ax, group, x_col, series_configs):
+    """Plot multiple series on an axis. series_configs: list of (col, label, color, marker)."""
+    for col, label, color, marker in series_configs:
+        if col in group.columns:
+            ax.plot(group[x_col], group[col], marker=marker, linestyle='-',
+                    label=label, color=color, markersize=8, linewidth=2)
 
 
 def _safe_max(series):
@@ -261,42 +250,31 @@ def _plot_grouped_subplots(df, group_by, x_col, plot_func, filename, output_dir=
     _save_chart(os.path.join(output_dir, filename))
 
 
-def plot_response_times_by_concurrency(df, output_dir="."):
-    """Plot P95 response times vs concurrency for each tenant configuration."""
+def _plot_response_times(df, output_dir, group_by, x_col, xlabel, title_suffix, filename):
+    """Generic helper to plot P95 response times grouped by a dimension."""
     operations = get_operation_names(df)
     p95_cols = [f'{op}_p95_ms' for op in operations if f'{op}_p95_ms' in df.columns]
-    y_max = _safe_max(df[p95_cols].max().max()) if p95_cols else None
-    if y_max is not None:
-        y_max *= 1.1
+    y_max = _safe_max(df[p95_cols].max().max()) * 1.1 if p95_cols else None
     
-    def plot_func(ax, group, x_col, tenants):
-        _plot_response_times_on_axis(
-            ax, group, x_col, operations, '_p95_ms',
-            'Concurrency', 'P95 Response Time (ms)',
-            f'P95 Response Times - {tenants} Tenant(s)'
-        )
+    def plot_func(ax, group, x, group_val):
+        series = [(f'{op}_p95_ms', op, DISTINCT_COLORS[i % len(DISTINCT_COLORS)], 
+                   MARKERS[i % len(MARKERS)]) for i, op in enumerate(operations)]
+        _plot_multi_series(ax, group, x, series)
+        _setup_line_axis(ax, xlabel, 'P95 Response Time (ms)', f'P95 Response Times - {group_val} {title_suffix}')
     
-    _plot_grouped_subplots(df, 'tenants', 'concurrency', plot_func, 
-                           'chart_response_times_by_concurrency.png', output_dir, y_max=y_max)
+    _plot_grouped_subplots(df, group_by, x_col, plot_func, filename, output_dir, y_max=y_max)
+
+
+def plot_response_times_by_concurrency(df, output_dir="."):
+    """Plot P95 response times vs concurrency for each tenant configuration."""
+    _plot_response_times(df, output_dir, 'tenants', 'concurrency', 'Concurrency', 
+                         'Tenant(s)', 'chart_response_times_by_concurrency.png')
 
 
 def plot_response_times_by_tenants(df, output_dir="."):
     """Plot P95 response times vs tenants for each concurrency configuration."""
-    operations = get_operation_names(df)
-    p95_cols = [f'{op}_p95_ms' for op in operations if f'{op}_p95_ms' in df.columns]
-    y_max = _safe_max(df[p95_cols].max().max()) if p95_cols else None
-    if y_max is not None:
-        y_max *= 1.1
-    
-    def plot_func(ax, group, x_col, concurrency):
-        _plot_response_times_on_axis(
-            ax, group, x_col, operations, '_p95_ms',
-            'Tenants', 'P95 Response Time (ms)',
-            f'P95 Response Times - {concurrency} Concurrency'
-        )
-    
-    _plot_grouped_subplots(df, 'concurrency', 'tenants', plot_func,
-                           'chart_response_times_by_tenants.png', output_dir, y_max=y_max)
+    _plot_response_times(df, output_dir, 'concurrency', 'tenants', 'Tenants',
+                         'Concurrency', 'chart_response_times_by_tenants.png')
 
 
 def _plot_heatmap(df, value_col, title, colorbar_label, filename, output_dir=".", value_format=".1f"):
@@ -597,53 +575,35 @@ def _prepare_mlflow_cpu_data(metrics_df):
     return mlflow_cpu
 
 
-def _plot_mlflow_cpu_on_axis(ax, group, x_col, xlabel, title):
-    """Helper to plot MLflow CPU utilization on a single axis."""
-    if 'mlflow_cpu' not in group.columns:
+def _plot_mlflow_cpu(metrics_df, output_dir, group_by, x_col, xlabel, title_suffix, filename):
+    """Generic helper to plot MLflow CPU utilization grouped by a dimension."""
+    mlflow_cpu = _prepare_mlflow_cpu_data(metrics_df)
+    if mlflow_cpu is None:
         return
+    y_max = _safe_max(mlflow_cpu['mlflow_cpu']) * 1.1 if _safe_max(mlflow_cpu['mlflow_cpu']) else None
     
-    ax.plot(group[x_col], group['mlflow_cpu'], marker='o', linestyle='-',
-            color=DISTINCT_COLORS[0], markersize=8, linewidth=2)
+    def plot_func(ax, group, x, group_val):
+        _plot_multi_series(ax, group, x, [('mlflow_cpu', 'mlflow', DISTINCT_COLORS[0], 'o')])
+        _setup_line_axis(ax, xlabel, 'CPU (cores)', f'MLflow Avg CPU - {group_val} {title_suffix}', show_legend=False)
     
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel('CPU (cores)')
-    ax.set_title(title)
-    ax.set_ylim(bottom=0)
-    ax.grid(True, alpha=0.3)
+    _plot_grouped_subplots(mlflow_cpu, group_by, x_col, plot_func, filename, output_dir, y_max=y_max)
 
 
 def plot_mlflow_cpu_by_concurrency(metrics_df, output_dir="."):
     """Plot MLflow avg CPU utilization vs concurrency for each tenant configuration."""
-    mlflow_cpu = _prepare_mlflow_cpu_data(metrics_df)
-    if mlflow_cpu is None:
-        return
-    y_max = _safe_max(mlflow_cpu['mlflow_cpu'])
-    if y_max is not None:
-        y_max *= 1.1
-    
-    def plot_func(ax, group, x_col, tenants):
-        _plot_mlflow_cpu_on_axis(ax, group, x_col, 'Concurrency',
-                                  f'MLflow Avg CPU - {tenants} Tenant(s)')
-    
-    _plot_grouped_subplots(mlflow_cpu, 'tenants', 'concurrency', plot_func,
-                           'chart_mlflow_cpu_by_concurrency.png', output_dir, y_max=y_max)
+    _plot_mlflow_cpu(metrics_df, output_dir, 'tenants', 'concurrency', 'Concurrency',
+                     'Tenant(s)', 'chart_mlflow_cpu_by_concurrency.png')
 
 
 def plot_mlflow_cpu_by_tenants(metrics_df, output_dir="."):
     """Plot MLflow avg CPU utilization vs tenants for each concurrency configuration."""
-    mlflow_cpu = _prepare_mlflow_cpu_data(metrics_df)
-    if mlflow_cpu is None:
-        return
-    y_max = _safe_max(mlflow_cpu['mlflow_cpu'])
-    if y_max is not None:
-        y_max *= 1.1
-    
-    def plot_func(ax, group, x_col, concurrency):
-        _plot_mlflow_cpu_on_axis(ax, group, x_col, 'Tenants',
-                                  f'MLflow Avg CPU - {concurrency} Concurrency')
-    
-    _plot_grouped_subplots(mlflow_cpu, 'concurrency', 'tenants', plot_func,
-                           'chart_mlflow_cpu_by_tenants.png', output_dir, y_max=y_max)
+    _plot_mlflow_cpu(metrics_df, output_dir, 'concurrency', 'tenants', 'Tenants',
+                     'Concurrency', 'chart_mlflow_cpu_by_tenants.png')
+
+
+def _section(title):
+    """Print a section header."""
+    print(f"\n{'=' * 60}\n{title}\n{'=' * 60}")
 
 
 def main():
@@ -658,75 +618,45 @@ def main():
                         help='Output directory for CSV and charts (default: current directory)')
     parser.add_argument('--csv-name', '-c', default='report_summary.csv',
                         help='Output CSV filename (default: report_summary.csv)')
-    
     args = parser.parse_args()
     
-    # Ensure output directory exists
     os.makedirs(args.output_dir, exist_ok=True)
+    _section("MLflow Performance Test Report Generator")
     
-    print("=" * 60)
-    print("MLflow Performance Test Report Generator")
-    print("=" * 60)
-    
-    # Load all summary files
+    # Load and process summary files
     print(f"\nSearching for files matching: {args.pattern}")
     summaries = load_summary_files(args.pattern)
-    print(f"Found {len(summaries)} summary file(s)")
-    
-    # Create DataFrame
     df = create_dataframe(summaries)
-    print(f"\nExtracted metrics for {len(df)} test configurations")
-    print(f"Tenants: {sorted(df['tenants'].unique())}")
-    print(f"Concurrency: {sorted(df['concurrency'].unique())}")
+    print(f"Found {len(summaries)} summary file(s), {len(df)} configurations")
+    print(f"Tenants: {sorted(df['tenants'].unique())}, Concurrency: {sorted(df['concurrency'].unique())}")
     
-    # Save CSV
-    csv_path = os.path.join(args.output_dir, args.csv_name)
-    save_csv(df, csv_path)
+    save_csv(df, os.path.join(args.output_dir, args.csv_name))
     
-    # Display summary table
-    print("\n" + "=" * 60)
-    print("Summary Table:")
-    print("=" * 60)
-    display_cols = ['tenants', 'concurrency', 'http_reqs_total', 'http_reqs_rate']
-    display_cols = [c for c in display_cols if c in df.columns]
+    # Summary table
+    _section("Summary Table")
+    display_cols = [c for c in ['tenants', 'concurrency', 'http_reqs_total', 'http_reqs_rate'] if c in df.columns]
     print(df[display_cols].to_string(index=False))
     
-    # Generate charts
-    print("\n" + "=" * 60)
-    print("Generating Charts...")
-    print("=" * 60)
+    # Generate k6 charts
+    _section("Generating Charts")
+    for plot_fn in [plot_summary_dashboard, plot_response_times_by_concurrency, plot_response_times_by_tenants,
+                    plot_throughput_heatmap, plot_passed_counts, plot_response_times_p95_heatmap]:
+        plot_fn(df, args.output_dir)
     
-    plot_summary_dashboard(df, args.output_dir)
-    plot_response_times_by_concurrency(df, args.output_dir)
-    plot_response_times_by_tenants(df, args.output_dir)
-    plot_throughput_heatmap(df, args.output_dir)
-    plot_passed_counts(df, args.output_dir)
-    plot_response_times_p95_heatmap(df, args.output_dir)
-    
-    # Load and process Prometheus metrics if available
-    print("\n" + "=" * 60)
-    print("Processing Prometheus Metrics...")
-    print("=" * 60)
-    
-    print(f"\nSearching for metrics files matching: {args.metrics_pattern}")
+    # Process Prometheus metrics
+    _section("Processing Prometheus Metrics")
+    print(f"Searching for: {args.metrics_pattern}")
     metrics_df = load_metrics_csv_files(args.metrics_pattern)
     
     if metrics_df is not None:
-        print(f"Found metrics for {len(metrics_df['experiment'].unique())} experiment(s)")
-        print(f"Components: {sorted(metrics_df['component'].unique())}")
-        
-        # Generate resource utilization charts
-        print("\nGenerating resource utilization charts...")
-        plot_cpu_utilization(metrics_df, args.output_dir)
-        plot_memory_utilization(metrics_df, args.output_dir)
-        plot_mlflow_cpu_by_concurrency(metrics_df, args.output_dir)
-        plot_mlflow_cpu_by_tenants(metrics_df, args.output_dir)
+        print(f"Found {len(metrics_df['experiment'].unique())} experiment(s), components: {sorted(metrics_df['component'].unique())}")
+        for plot_fn in [plot_cpu_utilization, plot_memory_utilization, 
+                        plot_mlflow_cpu_by_concurrency, plot_mlflow_cpu_by_tenants]:
+            plot_fn(metrics_df, args.output_dir)
     else:
-        print("No Prometheus metrics files found - skipping resource utilization charts")
+        print("No metrics files found - skipping resource charts")
     
-    print("\n" + "=" * 60)
-    print("Report generation complete!")
-    print("=" * 60)
+    _section("Report generation complete!")
 
 
 if __name__ == '__main__':

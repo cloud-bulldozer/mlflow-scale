@@ -10,18 +10,20 @@ const BASE_URL = __ENV.MLFLOW_URL || 'NO_URL_PROVIDED';
 const API_PREFIX = '/api/2.0/mlflow';
 const AUTH_TOKEN = __ENV.MLFLOW_TOKEN || 'NO_TOKEN_PROVIDED';
 
-const DISABLE_TENANCY = __ENV.DISABLE_TENANCY === 'true';
 const TENANT_COUNT = parseInt(__ENV.TENANT_COUNT || '1');
 const TOTAL_CONCURRENCY = parseInt(__ENV.CONCURRENCY || '10');
 
 // Custom metrics for response times
 const responseTimeMetrics = {
     create_experiment: new Trend('create_experiment_response_time'),
+    create_prompt: new Trend('create_prompt_response_time'),
+    create_prompt_version: new Trend('create_prompt_version_response_time'),
     create_run: new Trend('create_run_response_time'),
     log_metric: new Trend('log_metric_response_time'),
     log_parameter: new Trend('log_parameter_response_time'),
     log_artifact: new Trend('log_artifact_response_time'),
     update_run_status: new Trend('update_run_status_response_time'),
+    search_prompts: new Trend('search_prompts_response_time'),
     search_experiments: new Trend('search_experiments_response_time'),
     get_experiment: new Trend('get_experiment_response_time'),
     search_runs: new Trend('search_runs_response_time'),
@@ -33,11 +35,14 @@ const responseTimeMetrics = {
 // Counter metrics for pass/fail counts
 const statusCounters = {
     create_experiment: { passed: new Counter('create_experiment_passed'), failed: new Counter('create_experiment_failed') },
+    create_prompt: { passed: new Counter('create_prompt_passed'), failed: new Counter('create_prompt_failed') },
+    create_prompt_version: { passed: new Counter('create_prompt_version_passed'), failed: new Counter('create_prompt_version_failed') },
     create_run: { passed: new Counter('create_run_passed'), failed: new Counter('create_run_failed') },
     log_metric: { passed: new Counter('log_metric_passed'), failed: new Counter('log_metric_failed') },
     log_parameter: { passed: new Counter('log_parameter_passed'), failed: new Counter('log_parameter_failed') },
     log_artifact: { passed: new Counter('log_artifact_passed'), failed: new Counter('log_artifact_failed') },
     update_run_status: { passed: new Counter('update_run_status_passed'), failed: new Counter('update_run_status_failed') },
+    search_prompts: { passed: new Counter('search_prompts_passed'), failed: new Counter('search_prompts_failed') },
     search_experiments: { passed: new Counter('search_experiments_passed'), failed: new Counter('search_experiments_failed') },
     get_experiment: { passed: new Counter('get_experiment_passed'), failed: new Counter('get_experiment_failed') },
     search_runs: { passed: new Counter('search_runs_passed'), failed: new Counter('search_runs_failed') },
@@ -67,11 +72,11 @@ export const options = {
 };
 
 function getHeaders() {
-    const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AUTH_TOKEN}` };
-    if (!DISABLE_TENANCY) {
-        headers['X-MLFLOW-WORKSPACE'] = `tenant-${Math.floor(Math.random() * TENANT_COUNT) + 1}`;
-    }
-    return headers;
+    return {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${AUTH_TOKEN}`,
+        'X-MLFLOW-WORKSPACE': `tenant-${Math.floor(Math.random() * TENANT_COUNT) + 1}`,
+    };
 }
 
 function validateResponse(res, metricName) {
@@ -120,6 +125,44 @@ export function trainingScenario() {
     const expId = expRes.json().experiment_id;
 
     if (expId) {
+        for (let i = 0; i < 3; i++) {
+            const promptName = `${expId}-Prompt-${uuidv4()}`;
+            const promptText = `Summarize experiment ${expId} results in one paragraph.`;
+            const commitMessage = 'Synthetic prompt created by k6 scale test.';
+            const promptExperimentIds = JSON.stringify([String(expId)]);
+
+            const createPromptRes = http.post(
+                `${BASE_URL}${API_PREFIX}/registered-models/create`,
+                JSON.stringify({
+                    name: promptName,
+                    description: commitMessage,
+                    tags: [
+                        { key: 'mlflow.prompt.is_prompt', value: 'true' },
+                    ],
+                }),
+                { ...config, tags: { name: 'create_prompt' } }
+            );
+            if (!validateResponse(createPromptRes, 'create_prompt')) {
+                continue;
+            }
+
+            const createPromptVersionRes = http.post(
+                `${BASE_URL}${API_PREFIX}/model-versions/create`,
+            JSON.stringify({
+                name: promptName,
+                source: 'dummy-source',
+                description: commitMessage,
+                tags: [
+                    { key: 'mlflow.prompt.is_prompt', value: 'true' },
+                    { key: 'mlflow.prompt.text', value: promptText },
+                    { key: 'mlflow.prompt.type', value: 'text' },
+                    { key: 'mlflow.prompt.experiment_ids', value: promptExperimentIds },
+                ],
+            }),
+                { ...config, tags: { name: 'create_prompt_version' } }
+            );
+            validateResponse(createPromptVersionRes, 'create_prompt_version');
+        }
         for (let i = 0; i < 3; i++) {
             const runRes = http.post(`${BASE_URL}${API_PREFIX}/runs/create`, 
                 JSON.stringify({ experiment_id: expId, start_time: Date.now() }), { ...config, tags: { name: 'create_run' } });
@@ -193,6 +236,17 @@ export function trainingScenario() {
 export function browsingScenario() {
     const config = { headers: getHeaders() };
 
+    // Search Prompts
+    const searchPromptsRes = http.post(
+        `${BASE_URL}${API_PREFIX}/registered-models/search`,
+        JSON.stringify({
+            filter_string: "tags.`mlflow.prompt.is_prompt` = 'true'",
+            max_results: 100,
+        }),
+        { ...config, tags: { name: 'search_prompts' } }
+    );
+    validateResponse(searchPromptsRes, 'search_prompts');
+
     // Search Experiments
     const searchExpRes = http.post(`${BASE_URL}${API_PREFIX}/experiments/search`,
         JSON.stringify({ max_results: 25 }), { ...config, tags: { name: 'search_experiments' } });
@@ -257,11 +311,9 @@ export function browsingScenario() {
 }
 
 export function handleSummary(data) {
-    const mode = DISABLE_TENANCY ? 'baseline' : `tenants-${TENANT_COUNT}`;
-    const filename = `/tmp/summary_${mode}_concurrency_${TOTAL_CONCURRENCY}.json`;
+    const filename = `/tmp/summary_tenants-${TENANT_COUNT}_concurrency_${TOTAL_CONCURRENCY}.json`;
     
     const summary = {
-        mode: mode,
         concurrency: TOTAL_CONCURRENCY,
         tenants: TENANT_COUNT,
         data: data,
