@@ -3,13 +3,30 @@ kind: MLflow
 metadata:
   name: mlflow
 spec:
+  replicas: 4
+  resources:
+    requests:
+      cpu: 1
+      memory: "1Gi"
+    limits:
+      cpu: 4
+      memory: "1Gi"
+  workers: 1
+  # Pod co-locatation on the same node is required for PV based artifact store to work
+  affinity:
+    podAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app: mlflow
+          topologyKey: kubernetes.io/hostname
   storage:
     accessModes:
       - ReadWriteOnce
     resources:
       requests:
         storage: 10Gi
-  backendStoreUri: "postgresql://postgres:postgres@postgresql.default.svc.cluster.local:5432/mlflow"
+  backendStoreUri: "postgresql://postgres:postgres@postgres.opendatahub.svc.cluster.local:5432/mlflow"
   artifactsDestination: "file:///mlflow/artifacts"
   serveArtifacts: true
   image:

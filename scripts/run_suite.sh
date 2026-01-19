@@ -31,6 +31,9 @@ TEST_DURATION="${TEST_DURATION:-10m}"
 MLFLOW_URL="${MLFLOW_URL:-}"
 MLFLOW_TOKEN="${MLFLOW_TOKEN:-}"
 
+# Database backend configuration (sqlite or postgres)
+DB_BACKEND="${DB_BACKEND:-sqlite}"
+
 # ========================================
 # Helper Functions
 # ========================================
@@ -63,7 +66,59 @@ cleanup_on_exit() {
     oc delete mlflow mlflow --ignore-not-found=true 2>/dev/null || true
     oc wait --for=delete pod -l "app=mlflow" -n "${MLFLOW_NAMESPACE}" --timeout=120s || true
 
+    # Cleanup Postgres if it was deployed
+    if [[ "${DB_BACKEND}" == "postgres" ]]; then
+        cleanup_postgres
+    fi
+
     log_info "Cleanup completed successfully"
+}
+
+# ========================================
+# Postgres Management
+# ========================================
+
+deploy_postgres() {
+    log_info "Deploying PostgreSQL..."
+    
+    # Apply the Postgres manifest (PVC, Deployment, Service)
+    if ! oc apply -f "${SCRIPT_DIR}/../manifests/Postgres.yml"; then
+        log_error "Failed to apply PostgreSQL manifest"
+        return 1
+    fi
+    
+    # Wait for the Postgres pod to become ready
+    log_info "Waiting for PostgreSQL pod to become ready..."
+    if ! oc wait --for=condition=Available deployment/postgres -n "${NAMESPACE}" --timeout=300s; then
+        log_error "Timeout waiting for PostgreSQL deployment to become ready"
+        return 1
+    fi
+    
+    # Additional wait for the pod to be fully ready
+    if ! oc wait --for=condition=Ready pod -l "app=postgres" -n "${NAMESPACE}" --timeout=120s; then
+        log_error "Timeout waiting for PostgreSQL pod to become ready"
+        return 1
+    fi
+    
+    log_info "PostgreSQL deployed successfully"
+}
+
+cleanup_postgres() {
+    log_info "Cleaning up PostgreSQL resources..."
+    
+    # Delete the deployment
+    oc delete deployment postgres -n "${NAMESPACE}" --ignore-not-found=true 2>/dev/null || true
+    
+    # Wait for pods to be deleted
+    oc wait --for=delete pod -l "app=postgres" -n "${NAMESPACE}" --timeout=120s 2>/dev/null || true
+    
+    # Delete the service
+    oc delete service postgres -n "${NAMESPACE}" --ignore-not-found=true 2>/dev/null || true
+    
+    # Delete the PVC to ensure clean state
+    oc delete pvc postgres-data -n "${NAMESPACE}" --ignore-not-found=true 2>/dev/null || true
+    
+    log_info "PostgreSQL cleanup completed"
 }
 
 # ========================================
@@ -191,9 +246,26 @@ run_mlflow_cleanup() {
         return 1
     fi
     
+    # Handle Postgres backend - cleanup and redeploy for clean state
+    if [[ "${DB_BACKEND}" == "postgres" ]]; then
+        cleanup_postgres
+        if ! deploy_postgres; then
+            log_error "Failed to deploy PostgreSQL"
+            return 1
+        fi
+    fi
+    
+    # Select the appropriate MLflow manifest based on backend
+    local mlflow_manifest
+    if [[ "${DB_BACKEND}" == "postgres" ]]; then
+        mlflow_manifest="${SCRIPT_DIR}/../manifests/MLflow_Postgres.yml"
+    else
+        mlflow_manifest="${SCRIPT_DIR}/../manifests/MLflow.yml"
+    fi
+    
     # Re-apply the MLflow manifest
-    log_info "Re-applying MLflow manifest..."
-    if ! oc apply -f "${SCRIPT_DIR}/../manifests/MLflow.yml" -n "${MLFLOW_NAMESPACE}"; then
+    log_info "Re-applying MLflow manifest: ${mlflow_manifest}"
+    if ! oc apply -f "${mlflow_manifest}" -n "${MLFLOW_NAMESPACE}"; then
         log_error "Failed to apply MLflow manifest"
         return 1
     fi
@@ -259,6 +331,7 @@ collect_prometheus_metrics() {
     collect_cmd="${collect_cmd} --namespace ${MLFLOW_NAMESPACE}"
     collect_cmd="${collect_cmd} --pod-label ${MLFLOW_POD_LABEL}"
     collect_cmd="${collect_cmd} --test-id ${test_id}"
+    collect_cmd="${collect_cmd} --db-backend ${DB_BACKEND}"
     
     # Execute the metrics collection script
     if ${collect_cmd}; then
@@ -306,6 +379,7 @@ main() {
     log_section "MLflow Performance Test Suite"
     log_info "Results directory: ${RESULTS_DIR}"
     log_info "Namespace: ${NAMESPACE}"
+    log_info "Database backend: ${DB_BACKEND}"
     log_info "Test duration: ${TEST_DURATION}"
     log_info "Tenant counts: ${TENANT_COUNTS[*]}"
     log_info "Concurrency levels: ${CONCURRENCY_LEVELS[*]}"
@@ -405,20 +479,29 @@ Environment Variables:
   MLFLOW_URL           MLflow server URL (passed to k6 as MLFLOW_URL)
   MLFLOW_TOKEN         MLflow authentication token (passed to k6 as MLFLOW_TOKEN)
   TEST_DURATION        Duration for each test (passed to k6 as DURATION, default: 10m)
+  DB_BACKEND           Database backend: 'sqlite' or 'postgres' (default: sqlite)
+                       When 'postgres', deploys PostgreSQL and uses MLflow_Postgres.yml
+                       Cleanup between runs includes tearing down Postgres deployment and PVC
 
 K6 Test Variables (passed automatically based on test matrix):
   CONCURRENCY          Concurrent users count (from CONCURRENCY_LEVELS array)
   TENANT_COUNT         Number of tenants (from TENANT_COUNTS array)
 
 Examples:
-  # Run with defaults
+  # Run with defaults (SQLite backend)
   ./$(basename "$0")
+
+  # Run with PostgreSQL backend
+  DB_BACKEND=postgres ./$(basename "$0")
 
   # Run with custom configuration
   MLFLOW_URL=https://mlflow.example.com TEST_DURATION=5m ./$(basename "$0")
 
   # Run with custom results directory
   RESULTS_DIR=/tmp/mlflow-results ./$(basename "$0")
+
+  # Run PostgreSQL backend with custom results directory
+  DB_BACKEND=postgres RESULTS_DIR=/tmp/mlflow-postgres-results ./$(basename "$0")
 
 Requirements:
   - oc CLI configured with cluster access
@@ -438,6 +521,12 @@ for cmd in oc jq curl python3 envsubst; do
         exit 1
     fi
 done
+
+# Validate DB_BACKEND
+if [[ "${DB_BACKEND}" != "sqlite" && "${DB_BACKEND}" != "postgres" ]]; then
+    log_error "Invalid DB_BACKEND: ${DB_BACKEND}. Must be 'sqlite' or 'postgres'"
+    exit 1
+fi
 
 # Run main
 main "$@"

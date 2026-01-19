@@ -24,6 +24,8 @@ OPTIONAL ARGUMENTS:
   --prom-route HOST       Prometheus route hostname (auto-detected if not provided)
   --prom-token TOKEN      Prometheus auth token (auto-detected if not provided)
   --test-id ID            Test identifier for the output header
+  --db-backend BACKEND    Database backend: sqlite or postgres (default: sqlite)
+                          PostgreSQL metrics are only collected when set to 'postgres'
 
 EXAMPLES:
   $0 --start-time 1234567890 --end-time 1234568490 --output metrics.csv
@@ -38,6 +40,7 @@ EOF
 NAMESPACE="opendatahub"
 POD_LABEL="mlflow.*"
 TEST_ID=""
+DB_BACKEND="sqlite"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -72,6 +75,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --test-id)
             TEST_ID="$2"
+            shift 2
+            ;;
+        --db-backend)
+            DB_BACKEND="$2"
             shift 2
             ;;
         -h|--help)
@@ -145,6 +152,7 @@ cat > "$OUTPUT_FILE" <<EOF
 # Test ID: ${TEST_ID:-N/A}
 # Namespace: ${NAMESPACE}
 # Pod Label Pattern: ${POD_LABEL}
+# Database Backend: ${DB_BACKEND}
 # Test Duration: ${DURATION}s
 # Test Start: ${START_TIME_FMT}
 # Test End: ${END_TIME_FMT}
@@ -176,7 +184,7 @@ range="${DURATION}s"
 
 # MLflow pods
 collect_metric "mlflow" "cpu" "avg" "cores" \
-    "max(avg_over_time(irate(container_cpu_usage_seconds_total{namespace=\"${NAMESPACE}\",pod=~\"${POD_LABEL}\",container=\"mlflow\"}[2m])[$range:]))" \
+    "avg(avg_over_time(irate(container_cpu_usage_seconds_total{namespace=\"${NAMESPACE}\",pod=~\"${POD_LABEL}\",container=\"mlflow\"}[2m])[$range:]))" \
     "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
 collect_metric "mlflow" "cpu" "max" "cores" \
@@ -184,7 +192,7 @@ collect_metric "mlflow" "cpu" "max" "cores" \
     "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
 collect_metric "mlflow" "memory" "avg" "bytes" \
-    "max(avg_over_time(container_memory_working_set_bytes{namespace=\"${NAMESPACE}\",pod=~\"${POD_LABEL}\",container=\"mlflow\"}[$range:]))" \
+    "avg(avg_over_time(container_memory_working_set_bytes{namespace=\"${NAMESPACE}\",pod=~\"${POD_LABEL}\",container=\"mlflow\"}[$range:]))" \
     "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
 collect_metric "mlflow" "memory" "max" "bytes" \
@@ -195,26 +203,28 @@ collect_metric "mlflow" "pod_count" "current" "count" \
     "count(container_memory_working_set_bytes{namespace=\"${NAMESPACE}\",pod=~\"${POD_LABEL}\",container=\"mlflow\"})" \
     "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
-# PostgreSQL
-collect_metric "postgresql" "cpu" "avg" "cores" \
-    "max(avg_over_time(irate(container_cpu_usage_seconds_total{namespace=\"${NAMESPACE}\",pod=~\".*postgres.*|.*postgresql.*\",container!=\"\",container!=\"POD\"}[2m])[$range:]))" \
-    "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
+# PostgreSQL (only collected when db-backend is postgres)
+if [[ "${DB_BACKEND}" == "postgres" ]]; then
+    collect_metric "postgresql" "cpu" "avg" "cores" \
+        "avg(avg_over_time(irate(container_cpu_usage_seconds_total{namespace=\"${NAMESPACE}\",pod=~\".*postgres.*|.*postgresql.*\",container!=\"\",container!=\"POD\"}[2m])[$range:]))" \
+        "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
-collect_metric "postgresql" "cpu" "max" "cores" \
-    "max(max_over_time(irate(container_cpu_usage_seconds_total{namespace=\"${NAMESPACE}\",pod=~\".*postgres.*|.*postgresql.*\",container!=\"\",container!=\"POD\"}[2m])[$range:]))" \
-    "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
+    collect_metric "postgresql" "cpu" "max" "cores" \
+        "max(max_over_time(irate(container_cpu_usage_seconds_total{namespace=\"${NAMESPACE}\",pod=~\".*postgres.*|.*postgresql.*\",container!=\"\",container!=\"POD\"}[2m])[$range:]))" \
+        "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
-collect_metric "postgresql" "memory" "avg" "bytes" \
-    "max(avg_over_time(container_memory_working_set_bytes{namespace=\"${NAMESPACE}\",pod=~\".*postgres.*|.*postgresql.*\",container!=\"\",container!=\"POD\"}[$range:]))" \
-    "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
+    collect_metric "postgresql" "memory" "avg" "bytes" \
+        "avg(avg_over_time(container_memory_working_set_bytes{namespace=\"${NAMESPACE}\",pod=~\".*postgres.*|.*postgresql.*\",container!=\"\",container!=\"POD\"}[$range:]))" \
+        "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
-collect_metric "postgresql" "memory" "max" "bytes" \
-    "max(max_over_time(container_memory_working_set_bytes{namespace=\"${NAMESPACE}\",pod=~\".*postgres.*|.*postgresql.*\",container!=\"\",container!=\"POD\"}[$range:]))" \
-    "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
+    collect_metric "postgresql" "memory" "max" "bytes" \
+        "max(max_over_time(container_memory_working_set_bytes{namespace=\"${NAMESPACE}\",pod=~\".*postgres.*|.*postgresql.*\",container!=\"\",container!=\"POD\"}[$range:]))" \
+        "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
+fi
 
 # k6-benchmark
 collect_metric "k6_benchmark" "cpu" "avg" "cores" \
-    "max(avg_over_time(irate(container_cpu_usage_seconds_total{namespace=\"${NAMESPACE}\",pod=\"k6-benchmark\",container!=\"\",container!=\"POD\"}[2m])[$range:]))" \
+    "avg(avg_over_time(irate(container_cpu_usage_seconds_total{namespace=\"${NAMESPACE}\",pod=\"k6-benchmark\",container!=\"\",container!=\"POD\"}[2m])[$range:]))" \
     "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
 collect_metric "k6_benchmark" "cpu" "max" "cores" \
@@ -222,7 +232,7 @@ collect_metric "k6_benchmark" "cpu" "max" "cores" \
     "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
 collect_metric "k6_benchmark" "memory" "avg" "bytes" \
-    "max(avg_over_time(container_memory_working_set_bytes{namespace=\"${NAMESPACE}\",pod=\"k6-benchmark\",container!=\"\",container!=\"POD\"}[$range:]))" \
+    "avg(avg_over_time(container_memory_working_set_bytes{namespace=\"${NAMESPACE}\",pod=\"k6-benchmark\",container!=\"\",container!=\"POD\"}[$range:]))" \
     "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
 collect_metric "k6_benchmark" "memory" "max" "bytes" \
@@ -231,7 +241,7 @@ collect_metric "k6_benchmark" "memory" "max" "bytes" \
 
 # Data Science Gateway
 collect_metric "data_science_gateway" "cpu" "avg" "cores" \
-    "max(avg_over_time(irate(container_cpu_usage_seconds_total{namespace=\"openshift-ingress\",pod=~\"data-science-gateway.*\",container!=\"\",container!=\"POD\"}[2m])[$range:]))" \
+    "avg(avg_over_time(irate(container_cpu_usage_seconds_total{namespace=\"openshift-ingress\",pod=~\"data-science-gateway.*\",container!=\"\",container!=\"POD\"}[2m])[$range:]))" \
     "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
 collect_metric "data_science_gateway" "cpu" "max" "cores" \
@@ -239,7 +249,7 @@ collect_metric "data_science_gateway" "cpu" "max" "cores" \
     "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
 collect_metric "data_science_gateway" "memory" "avg" "bytes" \
-    "max(avg_over_time(container_memory_working_set_bytes{namespace=\"openshift-ingress\",pod=~\"data-science-gateway.*\",container!=\"\",container!=\"POD\"}[$range:]))" \
+    "avg(avg_over_time(container_memory_working_set_bytes{namespace=\"openshift-ingress\",pod=~\"data-science-gateway.*\",container!=\"\",container!=\"POD\"}[$range:]))" \
     "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
 collect_metric "data_science_gateway" "memory" "max" "bytes" \
@@ -248,7 +258,7 @@ collect_metric "data_science_gateway" "memory" "max" "bytes" \
 
 # Kube Auth Proxy
 collect_metric "kube_auth_proxy" "cpu" "avg" "cores" \
-    "max(avg_over_time(irate(container_cpu_usage_seconds_total{namespace=\"openshift-ingress\",pod=~\"kube-auth-proxy.*\",container!=\"\",container!=\"POD\"}[2m])[$range:]))" \
+    "avg(avg_over_time(irate(container_cpu_usage_seconds_total{namespace=\"openshift-ingress\",pod=~\"kube-auth-proxy.*\",container!=\"\",container!=\"POD\"}[2m])[$range:]))" \
     "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
 collect_metric "kube_auth_proxy" "cpu" "max" "cores" \
@@ -256,7 +266,7 @@ collect_metric "kube_auth_proxy" "cpu" "max" "cores" \
     "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
 collect_metric "kube_auth_proxy" "memory" "avg" "bytes" \
-    "max(avg_over_time(container_memory_working_set_bytes{namespace=\"openshift-ingress\",pod=~\"kube-auth-proxy.*\",container!=\"\",container!=\"POD\"}[$range:]))" \
+    "avg(avg_over_time(container_memory_working_set_bytes{namespace=\"openshift-ingress\",pod=~\"kube-auth-proxy.*\",container!=\"\",container!=\"POD\"}[$range:]))" \
     "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
 collect_metric "kube_auth_proxy" "memory" "max" "bytes" \
@@ -265,7 +275,7 @@ collect_metric "kube_auth_proxy" "memory" "max" "bytes" \
 
 # Router
 collect_metric "router" "cpu" "avg" "cores" \
-    "max(avg_over_time(irate(container_cpu_usage_seconds_total{namespace=\"openshift-ingress\",pod=~\"router-default.*\",container!=\"\",container!=\"POD\"}[2m])[$range:]))" \
+    "avg(avg_over_time(irate(container_cpu_usage_seconds_total{namespace=\"openshift-ingress\",pod=~\"router-default.*\",container!=\"\",container!=\"POD\"}[2m])[$range:]))" \
     "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
 collect_metric "router" "cpu" "max" "cores" \
@@ -273,7 +283,7 @@ collect_metric "router" "cpu" "max" "cores" \
     "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
 collect_metric "router" "memory" "avg" "bytes" \
-    "max(avg_over_time(container_memory_working_set_bytes{namespace=\"openshift-ingress\",pod=~\"router-default.*\",container!=\"\",container!=\"POD\"}[$range:]))" \
+    "avg(avg_over_time(container_memory_working_set_bytes{namespace=\"openshift-ingress\",pod=~\"router-default.*\",container!=\"\",container!=\"POD\"}[$range:]))" \
     "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
 collect_metric "router" "memory" "max" "bytes" \
@@ -282,7 +292,7 @@ collect_metric "router" "memory" "max" "bytes" \
 
 # OpenShift OAuth
 collect_metric "openshift_oauth" "cpu" "avg" "cores" \
-    "max(avg_over_time(irate(container_cpu_usage_seconds_total{namespace=\"openshift-authentication\",pod=~\"oauth-openshift.*\",container!=\"\",container!=\"POD\"}[2m])[$range:]))" \
+    "avg(avg_over_time(irate(container_cpu_usage_seconds_total{namespace=\"openshift-authentication\",pod=~\"oauth-openshift.*\",container!=\"\",container!=\"POD\"}[2m])[$range:]))" \
     "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
 collect_metric "openshift_oauth" "cpu" "max" "cores" \
@@ -290,7 +300,7 @@ collect_metric "openshift_oauth" "cpu" "max" "cores" \
     "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
 collect_metric "openshift_oauth" "memory" "avg" "bytes" \
-    "max(avg_over_time(container_memory_working_set_bytes{namespace=\"openshift-authentication\",pod=~\"oauth-openshift.*\",container!=\"\",container!=\"POD\"}[$range:]))" \
+    "avg(avg_over_time(container_memory_working_set_bytes{namespace=\"openshift-authentication\",pod=~\"oauth-openshift.*\",container!=\"\",container!=\"POD\"}[$range:]))" \
     "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
 collect_metric "openshift_oauth" "memory" "max" "bytes" \
@@ -299,7 +309,7 @@ collect_metric "openshift_oauth" "memory" "max" "bytes" \
 
 # Cluster-wide
 collect_metric "cluster" "cpu_utilization" "avg" "percent" \
-    "max(avg_over_time((1 - avg(irate(node_cpu_seconds_total{mode=\"idle\"}[2m])))[$range:]) * 100)" \
+    "avg(avg_over_time((1 - avg(irate(node_cpu_seconds_total{mode=\"idle\"}[2m])))[$range:]) * 100)" \
     "$PROM_ROUTE" "$PROM_TOKEN" "$OUTPUT_FILE" "$END_TIME"
 
 collect_metric "cluster" "cpu_utilization" "max" "percent" \

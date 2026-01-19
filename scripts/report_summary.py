@@ -111,6 +111,7 @@ def extract_metrics(summary):
         elif metric_name.endswith('_passed') and metric_type == 'counter':
             base_name = metric_name.replace('_passed', '')
             result[f'{base_name}_passed'] = values.get('count', 0)
+            result[f'{base_name}_rps'] = values.get('rate', 0)
         
         elif metric_name.endswith('_failed') and metric_type == 'counter':
             base_name = metric_name.replace('_failed', '')
@@ -157,13 +158,24 @@ DISTINCT_COLORS = [
     '#ff7f00',  # orange
     '#a65628',  # brown
     '#f781bf',  # pink
-    '#999999',  # grey
     '#17becf',  # cyan
     '#bcbd22',  # olive
+    '#7f7f7f',  # grey
 ]
 
 # Different markers for each operation
-MARKERS = ['o', 's', '^', 'D', 'v', 'p', 'h', '*', 'X', 'P']
+MARKERS = ['o', 's', '^', 'D', 'v', 'p', 'h', '*', 'X', 'P', '<', '>', '8', 'H']
+
+
+def get_series_style(index):
+    """Get color and marker for a series index, cycling both independently.
+    
+    Both color and marker cycle with each series but at different rates,
+    giving LCM(10, 14) = 70 unique combinations before repeating.
+    """
+    color = DISTINCT_COLORS[index % len(DISTINCT_COLORS)]
+    marker = MARKERS[index % len(MARKERS)]
+    return color, marker
 
 
 def _save_chart(filepath):
@@ -177,7 +189,7 @@ def _save_chart(filepath):
 def _add_config_column(df):
     """Add a 'config' column with T{tenants}_C{concurrency} format."""
     df = df.copy()
-    df['config'] = df.apply(lambda r: f"T{r['tenants']}_C{r['concurrency']}", axis=1)
+    df['config'] = df.apply(lambda r: f"T{int(r['tenants'])}_C{int(r['concurrency'])}", axis=1)
     return df
 
 
@@ -257,8 +269,7 @@ def _plot_response_times(df, output_dir, group_by, x_col, xlabel, title_suffix, 
     y_max = _safe_max(df[p95_cols].max().max()) * 1.1 if p95_cols else None
     
     def plot_func(ax, group, x, group_val):
-        series = [(f'{op}_p95_ms', op, DISTINCT_COLORS[i % len(DISTINCT_COLORS)], 
-                   MARKERS[i % len(MARKERS)]) for i, op in enumerate(operations)]
+        series = [(f'{op}_p95_ms', op, *get_series_style(i)) for i, op in enumerate(operations)]
         _plot_multi_series(ax, group, x, series)
         _setup_line_axis(ax, xlabel, 'P95 Response Time (ms)', f'P95 Response Times - {group_val} {title_suffix}')
     
@@ -275,6 +286,32 @@ def plot_response_times_by_tenants(df, output_dir="."):
     """Plot P95 response times vs tenants for each concurrency configuration."""
     _plot_response_times(df, output_dir, 'concurrency', 'tenants', 'Tenants',
                          'Concurrency', 'chart_response_times_by_tenants.png')
+
+
+def _plot_rps(df, output_dir, group_by, x_col, xlabel, title_suffix, filename):
+    """Generic helper to plot RPS (requests per second) grouped by a dimension."""
+    operations = get_operation_names(df)
+    rps_cols = [f'{op}_rps' for op in operations if f'{op}_rps' in df.columns]
+    y_max = _safe_max(df[rps_cols].max().max()) * 1.1 if rps_cols else None
+    
+    def plot_func(ax, group, x, group_val):
+        series = [(f'{op}_rps', op, *get_series_style(i)) for i, op in enumerate(operations)]
+        _plot_multi_series(ax, group, x, series)
+        _setup_line_axis(ax, xlabel, 'Requests per Second', f'RPS - {group_val} {title_suffix}')
+    
+    _plot_grouped_subplots(df, group_by, x_col, plot_func, filename, output_dir, y_max=y_max)
+
+
+def plot_rps_by_concurrency(df, output_dir="."):
+    """Plot RPS vs concurrency for each tenant configuration."""
+    _plot_rps(df, output_dir, 'tenants', 'concurrency', 'Concurrency', 
+              'Tenant(s)', 'chart_rps_by_concurrency.png')
+
+
+def plot_rps_by_tenants(df, output_dir="."):
+    """Plot RPS vs tenants for each concurrency configuration."""
+    _plot_rps(df, output_dir, 'concurrency', 'tenants', 'Tenants',
+              'Concurrency', 'chart_rps_by_tenants.png')
 
 
 def _plot_heatmap(df, value_col, title, colorbar_label, filename, output_dir=".", value_format=".1f"):
@@ -583,7 +620,7 @@ def _plot_mlflow_cpu(metrics_df, output_dir, group_by, x_col, xlabel, title_suff
     y_max = _safe_max(mlflow_cpu['mlflow_cpu']) * 1.1 if _safe_max(mlflow_cpu['mlflow_cpu']) else None
     
     def plot_func(ax, group, x, group_val):
-        _plot_multi_series(ax, group, x, [('mlflow_cpu', 'mlflow', DISTINCT_COLORS[0], 'o')])
+        _plot_multi_series(ax, group, x, [('mlflow_cpu', 'mlflow', *get_series_style(0))])
         _setup_line_axis(ax, xlabel, 'CPU (cores)', f'MLflow Avg CPU - {group_val} {title_suffix}', show_legend=False)
     
     _plot_grouped_subplots(mlflow_cpu, group_by, x_col, plot_func, filename, output_dir, y_max=y_max)
@@ -640,6 +677,7 @@ def main():
     # Generate k6 charts
     _section("Generating Charts")
     for plot_fn in [plot_summary_dashboard, plot_response_times_by_concurrency, plot_response_times_by_tenants,
+                    plot_rps_by_concurrency, plot_rps_by_tenants,
                     plot_throughput_heatmap, plot_passed_counts, plot_response_times_p95_heatmap]:
         plot_fn(df, args.output_dir)
     

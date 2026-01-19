@@ -10,6 +10,7 @@ A comprehensive collection of scripts for running performance & scale tests for 
 
 - **Automated Test Suite** — Full test lifecycle management including setup, execution, and cleanup
 - **Multi-Tenant Testing** — Validate MLflow performance across different tenant configurations
+- **Database Backend Support** — Test with SQLite (default) or PostgreSQL backends
 - **Prometheus Integration** — Automatic CPU/memory metrics collection from cluster
 - **Rich Visualizations** — Auto-generated charts for response times, throughput, and resource utilization
 - **Realistic Workloads** — 80/20 read/write split simulating actual MLflow usage patterns
@@ -57,8 +58,11 @@ make deploy-to-platform IMG=quay.io/mlflow-operator/mlflow-operator:master PLATF
 export MLFLOW_URL="https://your-data-science-gateway.example.com/mlflow"
 export MLFLOW_TOKEN="sha256~xxxxxxxxxxxx"
 
-# Run the full test suite
+# Run the full test suite with SQLite backend (default)
 ./scripts/run_suite.sh
+
+# Or run with PostgreSQL backend
+DB_BACKEND=postgres ./scripts/run_suite.sh
 ```
 
 ### 3. View Results
@@ -88,6 +92,30 @@ ls scripts/results/
 | `MLFLOW_URL` | — | MLflow server URL (required) |
 | `MLFLOW_TOKEN` | — | MLflow authentication token (required) |
 | `TEST_DURATION` | `5m` | Duration for each test iteration |
+| `DB_BACKEND` | `sqlite` | Database backend: `sqlite` or `postgres` |
+
+### Database Backends
+
+The test suite supports two database backends for MLflow:
+
+#### SQLite (Default)
+
+```bash
+# Uses manifests/MLflow.yml with embedded SQLite
+./scripts/run_suite.sh
+```
+
+#### PostgreSQL
+
+```bash
+# Deploys PostgreSQL from manifests/Postgres.yml and uses manifests/MLflow_Postgres.yml
+DB_BACKEND=postgres ./scripts/run_suite.sh
+```
+
+When using PostgreSQL:
+- A PostgreSQL deployment, service, and PVC are automatically created
+- Between test runs, PostgreSQL is completely torn down (including PVC) and redeployed for a clean state
+- MLflow connects via `postgresql://postgres:postgres@postgres.opendatahub.svc:5432/mlflow`
 
 ### Test Matrix
 
@@ -161,8 +189,9 @@ mlflow-scale/
 ├── manifests/                    # Kubernetes/OpenShift manifests
 │   ├── DataScienceCluster.yml    # OpenDataHub cluster config
 │   ├── DSCInitialization.yml     # DSC initialization
-│   ├── MLflow.yml                # MLflow CR definition
-│   └── MLflow_Postgres.yml       # PostgreSQL backend config
+│   ├── MLflow.yml                # MLflow CR (SQLite backend)
+│   ├── MLflow_Postgres.yml       # MLflow CR (PostgreSQL backend)
+│   └── Postgres.yml              # PostgreSQL deployment, service, and PVC
 │
 ├── scripts/
 │   ├── run_suite.sh              # Main test suite orchestrator
