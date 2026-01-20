@@ -149,6 +149,27 @@ def save_csv(df, output_path="report_summary.csv"):
     print(f"\nCSV report saved to: {output_path}")
 
 
+def save_p95_csv(df, output_path="report_p95_latencies.csv"):
+    """Save a CSV with only P95 latency columns."""
+    id_cols = ['tenants', 'concurrency']
+    p95_cols = [col for col in df.columns if col.endswith('_p95_ms')]
+    cols = id_cols + sorted(p95_cols)
+    df[cols].to_csv(output_path, index=False)
+    print(f"P95 latencies CSV saved to: {output_path}")
+
+
+def save_rps_csv(df, output_path="report_rps.csv"):
+    """Save a CSV with only RPS columns."""
+    id_cols = ['tenants', 'concurrency']
+    rps_cols = [col for col in df.columns if col.endswith('_rps')]
+    # Also include the overall http_reqs_rate if present
+    if 'http_reqs_rate' in df.columns:
+        rps_cols = ['http_reqs_rate'] + rps_cols
+    cols = id_cols + sorted(rps_cols)
+    df[cols].to_csv(output_path, index=False)
+    print(f"RPS CSV saved to: {output_path}")
+
+
 # Distinct color palette - hand-picked for maximum contrast
 DISTINCT_COLORS = [
     '#e41a1c',  # red
@@ -668,6 +689,8 @@ def main():
     print(f"Tenants: {sorted(df['tenants'].unique())}, Concurrency: {sorted(df['concurrency'].unique())}")
     
     save_csv(df, os.path.join(args.output_dir, args.csv_name))
+    save_p95_csv(df, os.path.join(args.output_dir, 'report_p95_latencies.csv'))
+    save_rps_csv(df, os.path.join(args.output_dir, 'report_rps.csv'))
     
     # Summary table
     _section("Summary Table")
