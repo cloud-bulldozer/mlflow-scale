@@ -170,6 +170,146 @@ def save_rps_csv(df, output_path="report_rps.csv"):
     print(f"RPS CSV saved to: {output_path}")
 
 
+# Operation categories for latency analysis
+OPERATION_CATEGORIES = {
+    'read': ['get_run', 'get_experiment', 'fetch_artifact', 'list_artifacts', 'list_workspaces'],
+    'write': ['create_run', 'create_experiment', 'log_metric', 'log_parameter', 'log_artifact', 
+              'update_run_status', 'create_prompt', 'create_prompt_version'],
+    'search': ['search_runs', 'search_experiments', 'search_prompts'],
+}
+
+
+def _get_operation_category(operation):
+    """Get the category for an operation."""
+    for category, ops in OPERATION_CATEGORIES.items():
+        if operation in ops:
+            return category
+    return 'other'
+
+
+def _calculate_pct_change(baseline, value):
+    """Calculate percentage change from baseline to value."""
+    if baseline is None or value is None or baseline == 0:
+        return None
+    return round(((value - baseline) / baseline) * 100, 1)
+
+
+def save_latency_analysis_csv(df, output_dir="."):
+    """Generate latency analysis CSVs showing impact of tenant count on each operation.
+    
+    Creates two files:
+    1. latency_analysis_by_tenants.csv - Detailed breakdown by operation
+    2. latency_analysis_summary.csv - Aggregated by category
+    """
+    # Get unique tenant counts and concurrency levels
+    tenant_counts = sorted(df['tenants'].unique())
+    concurrency_levels = sorted(df['concurrency'].unique())
+    
+    if len(tenant_counts) < 2:
+        print("Skipping latency analysis - need at least 2 tenant configurations")
+        return
+    
+    # Find baseline (minimum tenant count) and comparison targets
+    baseline_tenants = min(tenant_counts)
+    
+    # Get all operations that have P95 metrics
+    operations = []
+    for col in df.columns:
+        if col.endswith('_p95_ms'):
+            op = col.replace('_p95_ms', '')
+            operations.append(op)
+    operations = sorted(operations)
+    
+    if not operations:
+        print("Skipping latency analysis - no P95 metrics found")
+        return
+    
+    # Build detailed analysis records
+    detailed_records = []
+    
+    for op in operations:
+        p95_col = f'{op}_p95_ms'
+        if p95_col not in df.columns:
+            continue
+        
+        category = _get_operation_category(op)
+        
+        for concurrency in concurrency_levels:
+            record = {
+                'operation': op,
+                'category': category,
+                'concurrency': concurrency,
+            }
+            
+            # Get P95 value for each tenant count
+            baseline_value = None
+            for tenants in tenant_counts:
+                row = df[(df['tenants'] == tenants) & (df['concurrency'] == concurrency)]
+                if not row.empty:
+                    value = round(row[p95_col].values[0], 2)
+                    record[f'{tenants}_tenant{"s" if tenants > 1 else ""}_p95_ms'] = value
+                    if tenants == baseline_tenants:
+                        baseline_value = value
+            
+            # Calculate percentage changes from baseline
+            for tenants in tenant_counts:
+                if tenants == baseline_tenants:
+                    continue
+                col_name = f'{tenants}_tenant{"s" if tenants > 1 else ""}_p95_ms'
+                if col_name in record and baseline_value:
+                    pct_change = _calculate_pct_change(baseline_value, record[col_name])
+                    record[f'change_{baseline_tenants}_to_{tenants}_pct'] = pct_change
+            
+            detailed_records.append(record)
+    
+    # Create detailed DataFrame and save
+    detailed_df = pd.DataFrame(detailed_records)
+    detailed_path = os.path.join(output_dir, 'report_latency_analysis_by_tenants.csv')
+    detailed_df.to_csv(detailed_path, index=False)
+    print(f"Latency analysis (detailed) saved to: {detailed_path}")
+    
+    # Build summary by category
+    summary_records = []
+    categories = sorted(set(r['category'] for r in detailed_records))
+    
+    for category in categories:
+        category_records = [r for r in detailed_records if r['category'] == category]
+        
+        for concurrency in concurrency_levels:
+            conc_records = [r for r in category_records if r['concurrency'] == concurrency]
+            if not conc_records:
+                continue
+            
+            summary = {
+                'category': category,
+                'concurrency': concurrency,
+            }
+            
+            # Average P95 for each tenant count
+            for tenants in tenant_counts:
+                col_name = f'{tenants}_tenant{"s" if tenants > 1 else ""}_p95_ms'
+                values = [r[col_name] for r in conc_records if col_name in r and r[col_name] is not None]
+                if values:
+                    summary[f'avg_{tenants}_tenant{"s" if tenants > 1 else ""}_p95_ms'] = round(np.mean(values), 2)
+            
+            # Average percentage changes
+            for tenants in tenant_counts:
+                if tenants == baseline_tenants:
+                    continue
+                pct_col = f'change_{baseline_tenants}_to_{tenants}_pct'
+                values = [r[pct_col] for r in conc_records if pct_col in r and r[pct_col] is not None]
+                if values:
+                    summary[f'avg_change_{baseline_tenants}_to_{tenants}_pct'] = round(np.mean(values), 1)
+            
+            summary_records.append(summary)
+    
+    # Create summary DataFrame and save
+    summary_df = pd.DataFrame(summary_records)
+    summary_path = os.path.join(output_dir, 'report_latency_analysis_summary.csv')
+    summary_df.to_csv(summary_path, index=False)
+    print(f"Latency analysis (summary) saved to: {summary_path}")
+
+
 # Distinct color palette - hand-picked for maximum contrast
 DISTINCT_COLORS = [
     '#e41a1c',  # red
@@ -691,6 +831,7 @@ def main():
     save_csv(df, os.path.join(args.output_dir, args.csv_name))
     save_p95_csv(df, os.path.join(args.output_dir, 'report_p95_latencies.csv'))
     save_rps_csv(df, os.path.join(args.output_dir, 'report_rps.csv'))
+    save_latency_analysis_csv(df, args.output_dir)
     
     # Summary table
     _section("Summary Table")
