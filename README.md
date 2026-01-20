@@ -123,7 +123,7 @@ The default test matrix can be modified in `run_suite.sh`:
 
 ```bash
 TENANT_COUNTS=("1" "10" "100" "500")  # Number of tenants
-CONCURRENCY_LEVELS=(5 10 20)          # Concurrency per test
+CONCURRENCY_LEVELS=(5 10 20 50)       # Concurrency per test
 TEST_DURATION="10m"                   # Duration per test
 ```
 
