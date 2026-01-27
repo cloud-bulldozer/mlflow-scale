@@ -4,13 +4,6 @@ metadata:
   name: mlflow
 spec:
   replicas: 4
-  resources:
-    requests:
-      cpu: 1
-      memory: "1Gi"
-    limits:
-      cpu: 4
-      memory: "1Gi"
   workers: 1
   # Pod co-locatation on the same node is required for PV based artifact store to work
   affinity:

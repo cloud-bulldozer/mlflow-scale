@@ -8,6 +8,7 @@ import { sleep } from 'k6';
 // --- CONFIGURATION ---
 const BASE_URL = __ENV.MLFLOW_URL || 'NO_URL_PROVIDED';
 const API_PREFIX = '/api/2.0/mlflow';
+const API_PREFIX_v3 = '/api/3.0/mlflow';
 const AUTH_TOKEN = __ENV.MLFLOW_TOKEN || 'NO_TOKEN_PROVIDED';
 
 const TENANT_COUNT = parseInt(__ENV.TENANT_COUNT || '1');
@@ -239,7 +240,7 @@ export function browsingScenario() {
     const config = { headers: getHeaders() };
 
     // List Workspaces
-    const listWorkspacesRes = http.get(`${BASE_URL}${API_PREFIX}/workspaces`,
+    const listWorkspacesRes = http.get(`${BASE_URL}${API_PREFIX_v3}/workspaces`,
         { ...config, tags: { name: 'list_workspaces' } });
     validateResponse(listWorkspacesRes, 'list_workspaces');
 

@@ -3,14 +3,7 @@ kind: MLflow
 metadata:
   name: mlflow
 spec:
-  replicas: 4
-  resources:
-    requests:
-      cpu: 1
-      memory: "1Gi"
-    limits:
-      cpu: 4
-      memory: "1Gi"
+  replicas: 1
   workers: 1
   storage:
     accessModes:
